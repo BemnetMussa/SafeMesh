@@ -121,107 +121,107 @@ export function findPath(fromNode: Node, toNode: Node): Node[] | null {
   return null;
 }
 
-export function sendPacketAlongPath(path: Node[], color: string, payload: string, type: 'msg' | 'sos' = 'msg') {
+export function sleep(ms: number) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+export async function sendPacketAlongPath(path: Node[], color: string, payload: string, type: 'msg' | 'sos' = 'msg') {
   if (!path || path.length < 2) return;
   globalStatus.set('ROUTING');
   
-  const speed = get(animSpeed);
-  
   for (let i = 0; i < path.length - 1; i++) {
+    const s = get(animSpeed);
+    const travelTimeMs = 1200 / s;
+    
     const from = path[i];
     const to = path[i + 1];
-    const delay = i * (1200 / speed);
     
-    setTimeout(() => {
-      nodes.update(ns => {
-        const n = ns.find(n => n.id === from.id);
-        if (n) { n.pulseR = 0; n.pulseAlpha = 1; }
-        return ns;
-      });
-      
-      packets.update(ps => [...ps, {
-        fromX: from.x, fromY: from.y,
-        toX: to.x, toY: to.y,
-        progress: 0, color, type,
-        speed: 0.012 * get(animSpeed),
-        trail: []
-      }]);
-      
-      packetCount.update(c => c + 1);
-      
-      if (i === 0) {
-         addLog(type === 'sos' ? `🆘 SOS via ${from.label}` : `📤 TX: ${from.label} -> ${path[path.length-1].label}`, type === 'sos' ? 'sos' : 'msg');
-      }
-      
-      if (i === path.length - 2) {
-        setTimeout(() => {
-           addLog(`✅ DELIVERED to ${to.label}`, 'success' as any);
-           nodes.update(ns => {
-             const n = ns.find(n => n.id === to.id);
-             if (n) { n.pulseR = 0; n.pulseAlpha = 1; }
-             return ns;
-           });
-           globalStatus.set('DELIVERED');
-           setTimeout(() => {
-             if (get(globalStatus) === 'DELIVERED') globalStatus.set('IDLE');
-           }, 2000);
-        }, 900 / get(animSpeed));
-      }
-    }, delay);
+    nodes.update(ns => {
+      const n = ns.find(n => n.id === from.id);
+      if (n) { n.pulseR = 0; n.pulseAlpha = 1; }
+      return ns;
+    });
+    
+    if (i === 0) {
+       addLog(type === 'sos' ? `🆘 SOS via ${from.label}` : `📤 TX: ${from.label} -> ${path[path.length-1].label}`, type === 'sos' ? 'sos' : 'msg');
+    }
+    
+    packets.update(ps => [...ps, {
+      fromX: from.x, fromY: from.y,
+      toX: to.x, toY: to.y,
+      progress: 0, color, type,
+      speed: 16.66 / Math.max(1, travelTimeMs),
+      trail: []
+    }]);
+    
+    packetCount.update(c => c + 1);
+    
+    await sleep(travelTimeMs);
+    
+    if (i === path.length - 2) {
+       addLog(`✅ DELIVERED to ${to.label}`, 'sys' as any);
+       nodes.update(ns => {
+         const n = ns.find(n => n.id === to.id);
+         if (n) { n.pulseR = 0; n.pulseAlpha = 1; }
+         return ns;
+       });
+       globalStatus.set('DELIVERED');
+       setTimeout(() => {
+         if (get(globalStatus) === 'DELIVERED') globalStatus.set('IDLE');
+       }, 2000);
+    }
   }
 }
 
-export function floodBroadcast(source: Node, color: string, type: 'msg' | 'sos' = 'msg') {
+export async function floodBroadcast(source: Node, color: string, type: 'msg' | 'sos' = 'msg') {
   const visited = new Set([source.id]);
   const queue = [source];
-  let hop = 0;
   
   globalStatus.set(type === 'sos' ? 'SOS' : 'ROUTING');
   if (type === 'sos') addLog(`🆘 EMERGENCY BROADCAST from ${source.label}!`, 'sos');
   
-  function processLevel() {
-    if (queue.length === 0) {
-      setTimeout(() => {
-        if (get(globalStatus) !== 'IDLE') globalStatus.set('IDLE');
-      }, 1000);
-      return;
-    }
+  while (queue.length > 0) {
     const level = [...queue];
     queue.length = 0;
-    hop++;
-    const s = get(animSpeed);
-    const delayMs = (hop - 1) * (900 / s);
     
+    const s = get(animSpeed);
+    const travelTimeMs = 1200 / s;
+    let anyPropagated = false;
+
     level.forEach(node => {
       getNeighbors(node).forEach(nb => {
         if (!visited.has(nb.id)) {
           visited.add(nb.id);
           queue.push(nb);
-          setTimeout(() => {
-            nodes.update(ns => {
-              const n = ns.find(nx => nx.id === node.id);
-              if (n) { n.pulseR = 0; n.pulseAlpha = 1; }
-              return ns;
-            });
-            packets.update(ps => [...ps, {
-              fromX: node.x, fromY: node.y,
-              toX: nb.x, toY: nb.y,
-              progress: 0, color, type,
-              speed: 0.014 * get(animSpeed),
-              trail: []
-            }]);
-            packetCount.update(c => c + 1);
-          }, delayMs);
+          anyPropagated = true;
+          
+          nodes.update(ns => {
+            const n = ns.find(nx => nx.id === node.id);
+            if (n) { n.pulseR = 0; n.pulseAlpha = 1; }
+            return ns;
+          });
+          
+          packets.update(ps => [...ps, {
+            fromX: node.x, fromY: node.y,
+            toX: nb.x, toY: nb.y,
+            progress: 0, color, type,
+            speed: 16.66 / Math.max(1, travelTimeMs),
+            trail: []
+          }]);
+          
+          packetCount.update(c => c + 1);
         }
       });
     });
-    
-    if (queue.length > 0) {
-      setTimeout(processLevel, 900 / s);
+
+    if (queue.length > 0 && anyPropagated) {
+      await sleep(travelTimeMs);
     }
   }
   
-  processLevel();
+  setTimeout(() => {
+    if (get(globalStatus) !== 'IDLE') globalStatus.set('IDLE');
+  }, 1000);
 }
 
 export function triggerSOS(sourceNode?: Node) {

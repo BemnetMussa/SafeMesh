@@ -164,15 +164,19 @@
         n.pulseAlpha *= 0.92;
       }
 
-      // Signal radius hint (if hovered)
-      if (hoverNode && hoverNode.id === n.id) {
-        const radGrad = ctx.createRadialGradient(n.x, n.y, sRadius * 0.5, n.x, n.y, sRadius);
-        radGrad.addColorStop(0, 'transparent');
-        radGrad.addColorStop(1, hexAlpha(n.color, 0.08));
-        ctx.beginPath();
-        ctx.arc(n.x, n.y, sRadius, 0, Math.PI * 2);
-        ctx.fillStyle = radGrad;
-        ctx.fill();
+      // Signal radius coverage (persistent)
+      const isHovered = hoverNode && hoverNode.id === n.id;
+      const radGrad = ctx.createRadialGradient(n.x, n.y, sRadius * 0.1, n.x, n.y, sRadius);
+      radGrad.addColorStop(0, hexAlpha(n.color, isHovered ? 0.12 : 0.05));
+      radGrad.addColorStop(1, 'transparent');
+      
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, sRadius, 0, Math.PI * 2);
+      ctx.fillStyle = radGrad;
+      ctx.fill();
+
+      // Dashed border on hover
+      if (isHovered) {
         ctx.beginPath();
         ctx.arc(n.x, n.y, sRadius, 0, Math.PI * 2);
         ctx.strokeStyle = hexAlpha(n.color, 0.2);

@@ -65,86 +65,76 @@
   }
 </script>
 
-<aside class="glass-panel">
-  <!-- Transmit Section -->
-  <section>
-    <div class="section-title">
-      <Radio size={14} /> Transmit
-    </div>
-    
-    <div class="form-row">
-      <select bind:value={fromNode}>
-        <option value="" disabled>Origin node...</option>
-        {#each nList as n}
-          <option value={n.id}>{n.label}</option>
-        {/each}
-      </select>
-      
-      <select bind:value={toNode}>
-        <option value="broadcast">Broadcast (All)</option>
-        {#each nList as n}
-          <option value={n.id}>{n.label}</option>
-        {/each}
-      </select>
-    </div>
-    
-    <div class="input-group">
-      <input type="text" placeholder="Enter message payload..." bind:value={message} on:keydown={e => e.key === 'Enter' && transmit()} />
-      <button class="btn-send" on:click={transmit}>
-        <Send size={14} />
-      </button>
-    </div>
-  </section>
-
-  <!-- Controls Section -->
-  <section>
-    <div class="section-title">
-      <SlidersHorizontal size={14} /> Controls
-    </div>
-    
-    <div class="slider-group">
-      <div class="slider-label">
-        <span>Signal Range</span>
-        <span class="val">{rVal}m</span>
+<aside class="floating-hud">
+  
+  <!-- Right HUD Panel: Transmit & Controls -->
+  <div class="glass-panel panel controls-panel">
+    <section>
+      <div class="section-title">
+        <Radio size={14} /> Transmit
       </div>
-      <input type="range" min="60" max="300" value={rVal} on:input={handleRadiusChange} />
-    </div>
-    
-    <div class="slider-group">
-      <div class="slider-label">
-        <span>Routing Speed</span>
-        <span class="val">{sVal}x</span>
+      <div class="form-row">
+        <select bind:value={fromNode}>
+          <option value="" disabled>Origin node...</option>
+          {#each nList as n}
+            <option value={n.id}>{n.label}</option>
+          {/each}
+        </select>
+        <select bind:value={toNode}>
+          <option value="broadcast">Broadcast (All)</option>
+          {#each nList as n}
+            <option value={n.id}>{n.label}</option>
+          {/each}
+        </select>
       </div>
-      <input type="range" min="1" max="10" value={sVal} on:input={handleSpeedChange} />
-    </div>
-  </section>
+      <div class="input-group">
+        <input type="text" placeholder="Enter message payload..." bind:value={message} on:keydown={e => e.key === 'Enter' && transmit()} />
+        <button class="btn-send" on:click={transmit}>
+          <Send size={14} />
+        </button>
+      </div>
+    </section>
 
-  <!-- Nodes List -->
-  <section class="nodes-section">
-    <div class="section-title">
-      <Crosshair size={14} /> Active Nodes
-    </div>
-    <div class="node-list">
-      {#if nList.length === 0}
-        <div class="empty-state">No active nodes in mesh</div>
-      {:else}
-        {#each nList as n}
-          <div class="node-item" on:click={() => handleFocusNode(n.id)}>
-            <div class="node-dot" style="background: {n.color}; box-shadow: 0 0 10px {n.color};"></div>
-            <span class="node-name" style="color: {n.color}">{n.label}</span>
-            <button class="btn-del" on:click|stopPropagation={() => removeNode(n.id)}>
-              <Trash2 size={12} />
-            </button>
-          </div>
-        {/each}
-      {/if}
-    </div>
-  </section>
+    <section>
+      <div class="section-title">
+        <SlidersHorizontal size={14} /> Link Tuning
+      </div>
+      <div class="slider-group">
+        <div class="slider-label"><span>Signal Map</span><span class="val">{rVal}m</span></div>
+        <input type="range" min="60" max="360" value={rVal} on:input={handleRadiusChange} />
+      </div>
+      <div class="slider-group">
+        <div class="slider-label"><span>Flow Rate</span><span class="val">{sVal}x</span></div>
+        <input type="range" min="1" max="10" value={sVal} on:input={handleSpeedChange} />
+      </div>
+    </section>
 
-  <!-- Logs -->
-  <section class="log-section">
-    <div class="section-title">
-      <Activity size={14} /> Event Feed
+    <section class="nodes-section">
+      <div class="section-title">
+        <Crosshair size={14} /> Active Cluster
+      </div>
+      <div class="node-list">
+        {#if nList.length === 0}
+          <div class="empty-state">No nodes detected</div>
+        {:else}
+          {#each nList as n}
+            <div class="node-item" role="button" tabindex="0" on:click={() => handleFocusNode(n.id)}>
+              <div class="node-dot" style="background: {n.color}; box-shadow: 0 0 10px {n.color};"></div>
+              <span class="node-name" style="color: {n.color}">{n.label}</span>
+              <button class="btn-del" on:click|stopPropagation={() => removeNode(n.id)} aria-label="Remove node">
+                <Trash2 size={12} />
+              </button>
+            </div>
+          {/each}
+        {/if}
+      </div>
+    </section>
+  </div>
+
+  <!-- Left Bottom HUD Panel: Logs -->
+  <div class="glass-panel panel logs-panel">
+    <div class="section-title" style="padding: 12px 14px 6px">
+      <Activity size={14} /> Telemetry Feed
     </div>
     <div class="log-scroll">
       {#each logList as log (log.id)}
@@ -154,32 +144,54 @@
         </div>
       {/each}
     </div>
-  </section>
+  </div>
+
 </aside>
 
 <style>
-  aside {
-    width: 320px;
+  .floating-hud {
+    position: absolute;
+    inset: 0;
+    pointer-events: none; /* Passes clicks underlying canvas */
+    z-index: 50; /* Above canvas, below header */
+  }
+  
+  .panel {
+    position: absolute;
+    border-radius: 12px;
     display: flex;
     flex-direction: column;
-    border-top: none;
-    border-bottom: none;
-    border-right: none;
-    flex-shrink: 0;
-    position: relative;
-    z-index: 100;
+    pointer-events: auto; /* Catch clicks for panel contents */
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+  }
+
+  .controls-panel {
+    top: 24px;
+    right: 24px;
+    width: 320px;
+    max-height: calc(100% - 48px);
+  }
+
+  .logs-panel {
+    bottom: 24px;
+    left: 24px;
+    width: 380px;
+    height: 280px;
   }
   
   section {
-    padding: 20px;
+    padding: 16px;
     border-bottom: 1px solid var(--panel-border);
     display: flex;
     flex-direction: column;
     gap: 12px;
   }
+  section:last-child {
+    border-bottom: none;
+  }
   
-  .nodes-section { flex: 0 1 200px; min-height: 120px; }
-  .log-section { flex: 1 1 auto; border-bottom: none; overflow: hidden; }
+  .nodes-section { flex: 0 1 200px; min-height: 120px; overflow: hidden; }
   
   .section-title {
     display: flex;
@@ -190,10 +202,10 @@
     text-transform: uppercase;
     letter-spacing: 1px;
     color: var(--text-muted);
-    margin-bottom: 4px;
+    margin-bottom: 2px;
   }
 
-  .form-row {
+  .form-row, .input-group {
     display: flex;
     gap: 8px;
   }
@@ -208,13 +220,9 @@
     font-size: 12px;
     outline: none;
     transition: border-color 0.2s;
+    appearance: none;
   }
   select:focus { border-color: var(--accent-primary); }
-
-  .input-group {
-    display: flex;
-    gap: 8px;
-  }
   
   input[type="text"] {
     flex: 1;
@@ -265,6 +273,18 @@
   input[type="range"] {
     width: 100%;
     accent-color: var(--accent-primary);
+    height: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    outline: none;
+    -webkit-appearance: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px; height: 12px;
+    background: var(--accent-primary);
+    border-radius: 50%;
+    cursor: pointer;
   }
 
   .node-list {
@@ -286,14 +306,16 @@
     align-items: center;
     gap: 10px;
     padding: 8px 10px;
-    background: rgba(255, 255, 255, 0.02);
+    background: rgba(255, 255, 255, 0.03);
     border: 1px solid transparent;
     border-radius: 6px;
     cursor: pointer;
     transition: all 0.15s;
+    text-align: left;
+    width: 100%;
   }
   .node-item:hover {
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(255, 255, 255, 0.08);
     border-color: var(--panel-border);
   }
   .node-dot {
@@ -323,7 +345,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    padding-right: 4px;
+    padding: 0 14px 14px 14px;
   }
   
   .log-entry {
@@ -333,7 +355,7 @@
     padding: 8px 10px;
     border-radius: 6px;
     border-left: 2px solid transparent;
-    background: rgba(0, 0, 0, 0.15);
+    background: rgba(0, 0, 0, 0.2);
     font-size: 11px;
     line-height: 1.4;
     animation: fadeIn 0.3s ease;
