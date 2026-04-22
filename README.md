@@ -1,103 +1,47 @@
+# Svelte + TS + Vite
 
-# SafeMesh – Disaster-Resilient Offline Communication Network
+This template should help get you started developing with Svelte and TypeScript in Vite.
 
-## Project Overview
+## Recommended IDE Setup
 
-SafeMesh is a peer-to-peer mesh network built for disaster scenarios where cellular and internet infrastructure are unavailable. Using low-cost ESP32 devices and the ESP-NOW protocol, it enables off-grid messaging, multi-hop relaying, SOS alerts with GPS, and a web dashboard for monitoring nodes and messages.
+[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode).
 
-Developed as part of **IETP5201 – Integrated Engineering Team Project**.
+## Need an official Svelte framework?
 
-## Team Members
+Check out [SvelteKit](https://github.com/sveltejs/kit#readme), which is also powered by Vite. Deploy anywhere with its serverless-first approach and adapt to various platforms, with out of the box support for TypeScript, SCSS, and Less, and easily-added support for mdsvex, GraphQL, PostCSS, Tailwind CSS, and more.
 
-| Name | Role | GitHub |
-|------|------|--------|
-| Abenezer Abebe | Mesh Routing Algorithm | — |
-| Aman Abdela | Backend Developer (Web Dashboard) | — |
-| Aschalew Daraje | Frontend Developer | — |
-| Tsion Wubshet | WebSocket Integration | — |
-| Abubeker Assefa | Testing & Documentation | — |
-| Yusuf Mohammed | ESP-NOW Firmware (Node A) | — |
-| Sirajudin Seid | ESP-NOW Firmware (Node B) | — |
-| Ezra Leye | Multi-hop Simulation | — |
-| Jalete Kebede | Low-Power Optimization | — |
-| Kirubel Asfaw | Power Circuit Design | — |
-| Yididya Teklu | GPS Simulation | — |
-| Bemnet Mussa | **Team Lead & Researher ** | — |
+## Technical considerations
 
-> Add GitHub profile links where available.
+**Why use this over SvelteKit?**
 
-## Features
+- It brings its own routing solution which might not be preferable for some users.
+- It is first and foremost a framework that just happens to use Vite under the hood, not a Vite app.
 
-- Off-grid peer-to-peer messaging
-- Multi-hop communication (A → B → C)
-- SOS alerts with GPS location
-- Real-time web dashboard
-- Fully offline operation
-- Simulation-first development
+This template contains as little as possible to get started with Vite + TypeScript + Svelte, while taking into account the developer experience with regards to HMR and intellisense. It demonstrates capabilities on par with the other `create-vite` templates and is a good starting point for beginners dipping their toes into a Vite + Svelte project.
 
-## Tech Stack
+Should you later need the extended capabilities and extensibility provided by SvelteKit, the template has been structured similarly to SvelteKit so that it is easy to migrate.
 
-- **Protocol:** ESP-NOW  
-- **Hardware (simulated):** ESP32 (MicroPython)  
-- **Simulator:** Wokwi  
-- **Backend:** Flask (Python)  
-- **Frontend:** HTML, CSS, WebSockets  
-- **Version Control:** Git & GitHub  
+**Why `global.d.ts` instead of `compilerOptions.types` inside `jsconfig.json` or `tsconfig.json`?**
 
-## Getting Started (Simulation)
+Setting `compilerOptions.types` shuts out all other types not explicitly listed in the configuration. Using triple-slash references keeps the default TypeScript setting of accepting type information from the entire workspace, while also adding `svelte` and `vite/client` type information.
 
-### 2-Node Test
+**Why include `.vscode/extensions.json`?**
 
-1. Open two ESP32 MicroPython projects in Wokwi (separate tabs)
-2. Paste `sender.py` into Node A
-3. Paste `receiver.py` into Node B
-4. Run both simulations
-5. View messages in Node B serial monitor
+Other templates indirectly recommend extensions via the README, but this file allows VS Code to prompt the user to install the recommended extension upon opening the project.
 
-### 3-Node Mesh
+**Why enable `allowJs` in the TS template?**
 
-1. Open three tabs
-2. Use `broadcast_node.py` in all nodes
-3. Run all simulations
-4. Messages will propagate across all nodes
+While `allowJs: false` would indeed prevent the use of `.js` files in the project, it does not prevent the use of JavaScript syntax in `.svelte` files. In addition, it would force `checkJs: false`, bringing the worst of both worlds: not being able to guarantee the entire codebase is TypeScript, and also having worse typechecking for the existing JavaScript. In addition, there are valid use cases in which a mixed codebase may be relevant.
 
-## Project Status
+**Why is HMR not preserving my local component state?**
 
-- ✅ Point-to-point communication working  
-- ✅ Broadcast messaging functional  
-- 🔄 Multi-hop routing in progress  
-- 🔄 Web dashboard development ongoing  
-- 🔄 SOS + GPS integration pending  
+HMR state preservation comes with a number of gotchas! It has been disabled by default in both `svelte-hmr` and `@sveltejs/vite-plugin-svelte` due to its often surprising behavior. You can read the details [here](https://github.com/rixo/svelte-hmr#svelte-hmr).
 
-## Structure
+If you have state that's important to retain within a component, consider creating an external store which would not be replaced by HMR.
 
+```ts
+// store.ts
+// An extremely simple external store
+import { writable } from 'svelte/store'
+export default writable(0)
 ```
-
-SafeMesh/
-├── README.md
-├── code/
-│   ├── sender.py
-│   ├── receiver.py
-│   ├── broadcast_node.py
-│   └── web_dashboard/
-│       ├── app.py
-│       └── templates/
-│           └── index.html
-├── docs/
-└── reports/
-
-```
-
-## Contributing
-
-Team members contribute via pull requests. All changes are reviewed before merging.
-
-## License
-
-Academic use only.
-
----
-
-**Team Lead:** Bemnet Mussa  
-**Last Updated:** April 2026
-

@@ -1,0 +1,1084 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>SafeMesh — Mesh Network Visualizer</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;600&family=Share+Tech+Mono&display=swap" rel="stylesheet"/>
+<style>
+:root {
+  --bg: #020508;
+  --grid: rgba(0,200,100,0.04);
+  --green: #00ff88;
+  --green2: #00cc66;
+  --cyan: #00eeff;
+  --red: #ff2244;
+  --amber: #ffaa00;
+  --blue: #0088ff;
+  --dim: #1a3a2a;
+  --text: #aaddbb;
+  --panel: rgba(4,12,8,0.92);
+  --border: rgba(0,255,136,0.15);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Rajdhani', sans-serif;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  cursor: crosshair;
+}
+
+/* ── Scanline overlay ── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.08) 2px,
+    rgba(0,0,0,0.08) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── Header ── */
+header {
+  height: 52px;
+  background: rgba(2,8,5,0.97);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 18px;
+  gap: 0;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 100;
+}
+
+.logo {
+  font-family: 'Orbitron', monospace;
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 4px;
+  color: var(--green);
+  text-shadow: 0 0 20px var(--green), 0 0 40px rgba(0,255,136,0.3);
+  margin-right: 24px;
+}
+.logo em { color: #fff; font-style: normal; }
+
+.hdr-divider {
+  width: 1px; height: 24px;
+  background: var(--border);
+  margin: 0 16px;
+}
+
+.hdr-stat {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: rgba(0,255,136,0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.hdr-stat strong {
+  font-size: 16px;
+  font-weight: 400;
+  color: var(--green);
+  letter-spacing: 1px;
+}
+
+.hdr-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hdr-btn {
+  font-family: 'Orbitron', monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  padding: 6px 12px;
+  border: 1px solid;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-transform: uppercase;
+  background: transparent;
+}
+.btn-add {
+  border-color: var(--green2);
+  color: var(--green);
+}
+.btn-add:hover { background: rgba(0,255,136,0.1); box-shadow: 0 0 12px rgba(0,255,136,0.2); }
+
+.btn-sos {
+  border-color: var(--red);
+  color: var(--red);
+}
+.btn-sos:hover { background: rgba(255,34,68,0.15); box-shadow: 0 0 12px rgba(255,34,68,0.3); }
+.btn-sos.firing { animation: sosBtnPulse 0.4s infinite alternate; }
+@keyframes sosBtnPulse {
+  from { background: rgba(255,34,68,0.1); }
+  to   { background: rgba(255,34,68,0.4); box-shadow: 0 0 24px rgba(255,34,68,0.6); }
+}
+
+.btn-clear {
+  border-color: rgba(0,200,255,0.4);
+  color: var(--cyan);
+}
+.btn-clear:hover { background: rgba(0,238,255,0.08); }
+
+.clock {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 12px;
+  color: rgba(0,255,136,0.6);
+  letter-spacing: 2px;
+  margin-left: 8px;
+}
+
+/* ── Main area ── */
+.main {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ── Canvas area ── */
+#canvas-wrap {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+canvas#bg-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+canvas#main-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+/* Coord display */
+#coords {
+  position: absolute;
+  bottom: 10px;
+  left: 12px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  color: rgba(0,255,136,0.3);
+  letter-spacing: 1px;
+  pointer-events: none;
+}
+
+/* Mode indicator */
+#mode-indicator {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--amber);
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
+
+/* SOS overlay */
+#sos-flash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(ellipse at center, rgba(255,34,68,0.15) 0%, transparent 70%);
+  transition: opacity 0.1s;
+}
+
+/* ── Side panel ── */
+#side-panel {
+  width: 300px;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.panel-section {
+  border-bottom: 1px solid var(--border);
+  padding: 14px;
+}
+
+.panel-title {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 3px;
+  color: rgba(0,255,136,0.4);
+  margin-bottom: 12px;
+}
+
+/* Compose */
+.compose-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+#from-select, #to-select {
+  flex: 1;
+  background: rgba(0,20,10,0.8);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--green);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  padding: 5px 7px;
+  outline: none;
+  cursor: pointer;
+}
+#from-select:focus, #to-select:focus { border-color: var(--green2); }
+
+#msg-text {
+  width: 100%;
+  background: rgba(0,20,10,0.8);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text);
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13px;
+  padding: 7px 9px;
+  resize: none;
+  outline: none;
+  margin-bottom: 8px;
+}
+#msg-text:focus { border-color: var(--green2); }
+#msg-text::placeholder { color: rgba(100,150,100,0.4); }
+
+.send-btn {
+  width: 100%;
+  padding: 9px;
+  background: transparent;
+  border: 1px solid var(--green2);
+  border-radius: 2px;
+  color: var(--green);
+  font-family: 'Orbitron', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.send-btn:hover { background: rgba(0,255,136,0.08); box-shadow: 0 0 16px rgba(0,255,136,0.15); }
+.send-btn:active { background: rgba(0,255,136,0.2); }
+
+/* Node list */
+#node-list-wrap {
+  flex: 0 0 auto;
+  max-height: 200px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--dim) transparent;
+}
+
+.node-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.node-row:hover { background: rgba(0,255,136,0.05); }
+.node-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 6px currentColor;
+}
+.node-row-name {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+  flex: 1;
+}
+.node-row-id {
+  font-size: 9px;
+  color: rgba(0,255,136,0.3);
+  font-family: 'Share Tech Mono', monospace;
+}
+.node-row-del {
+  font-size: 10px;
+  color: rgba(255,34,68,0.4);
+  cursor: pointer;
+  padding: 0 2px;
+  transition: color 0.1s;
+}
+.node-row-del:hover { color: var(--red); }
+
+/* Event log */
+#event-log-wrap {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 14px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--dim) transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.log-entry {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 6px 8px;
+  border-left: 2px solid var(--dim);
+  background: rgba(0,255,136,0.02);
+  animation: logIn 0.3s ease;
+  word-break: break-word;
+}
+@keyframes logIn {
+  from { opacity: 0; transform: translateX(8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.log-entry.msg  { border-left-color: var(--green2); }
+.log-entry.sos  { border-left-color: var(--red); background: rgba(255,34,68,0.05); color: #ff8899; }
+.log-entry.sys  { border-left-color: var(--cyan); color: rgba(0,200,255,0.6); font-style: italic; }
+.log-entry.hop  { border-left-color: var(--amber); color: var(--amber); }
+.log-time { color: rgba(0,255,136,0.3); margin-right: 6px; }
+
+/* Speed control */
+.speed-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.speed-row label {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  color: rgba(0,255,136,0.4);
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+input[type=range] {
+  flex: 1;
+  accent-color: var(--green);
+}
+#speed-val {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  color: var(--green);
+  width: 28px;
+  text-align: right;
+}
+
+/* radius control */
+.radius-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+/* Tooltip */
+#tooltip {
+  position: absolute;
+  background: rgba(2,12,6,0.95);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 6px 10px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  color: var(--green);
+  pointer-events: none;
+  display: none;
+  z-index: 200;
+  white-space: nowrap;
+  box-shadow: 0 0 20px rgba(0,255,136,0.1);
+}
+
+/* Instruction banner */
+#hint {
+  position: absolute;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  color: rgba(0,255,136,0.3);
+  letter-spacing: 2px;
+  pointer-events: none;
+  text-align: center;
+  transition: opacity 1s;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">SAFE<em>MESH</em></div>
+  <div class="hdr-divider"></div>
+  <div class="hdr-stat"><span>NODES</span><strong id="h-nodes">0</strong></div>
+  <div class="hdr-divider"></div>
+  <div class="hdr-stat"><span>LINKS</span><strong id="h-links">0</strong></div>
+  <div class="hdr-divider"></div>
+  <div class="hdr-stat"><span>PACKETS</span><strong id="h-packets">0</strong></div>
+  <div class="hdr-divider"></div>
+  <div class="hdr-stat"><span>STATUS</span><strong id="h-status" style="color:var(--green)">IDLE</strong></div>
+  <div class="hdr-right">
+    <button class="hdr-btn btn-add" onclick="addRandomNode()">+ NODE</button>
+    <button class="hdr-btn btn-sos" id="sos-btn" onclick="triggerSOS()">⚡ SOS</button>
+    <button class="hdr-btn btn-clear" onclick="clearAll()">RESET</button>
+    <div class="clock" id="clock">00:00:00</div>
+  </div>
+</header>
+
+<div class="main">
+  <div id="canvas-wrap">
+    <canvas id="bg-grid"></canvas>
+    <canvas id="main-canvas"></canvas>
+    <div id="sos-flash"></div>
+    <div id="coords">X:0 Y:0</div>
+    <div id="mode-indicator">◈ CLICK CANVAS TO ADD NODE</div>
+    <div id="tooltip"></div>
+    <div id="hint">DRAG NODES · CLICK TO ADD · WATCH THE MESH ROUTE</div>
+  </div>
+
+  <div id="side-panel">
+    <div class="panel-section">
+      <div class="panel-title">◈ TRANSMIT MESSAGE</div>
+      <div class="compose-row">
+        <select id="from-select"><option value="">FROM…</option></select>
+        <select id="to-select"><option value="broadcast">BROADCAST</option></select>
+      </div>
+      <textarea id="msg-text" rows="2" placeholder="Enter message payload…"></textarea>
+      <button class="send-btn" onclick="sendMessage()">▶ TRANSMIT</button>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-title">◈ MESH NODES</div>
+      <div id="node-list-wrap"></div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-title">◈ SIMULATION CONTROLS</div>
+      <div class="speed-row">
+        <label>ANIM SPEED</label>
+        <input type="range" id="speed-slider" min="1" max="10" value="5" oninput="updateSpeed(this.value)"/>
+        <span id="speed-val">5</span>
+      </div>
+      <div class="radius-row">
+        <label>SIGNAL RADIUS</label>
+        <input type="range" id="radius-slider" min="60" max="260" value="140" oninput="updateRadius(this.value)"/>
+        <span id="radius-val" style="font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--green);width:36px;text-align:right">140</span>
+      </div>
+    </div>
+
+    <div class="panel-section" style="border-bottom:none; padding-bottom:6px;">
+      <div class="panel-title">◈ EVENT LOG</div>
+    </div>
+    <div id="event-log-wrap"></div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+//  SAFEMESH VISUALIZER — Core Engine
+// ═══════════════════════════════════════════════════════════════
+
+const wrap   = document.getElementById('canvas-wrap');
+const canvas = document.getElementById('main-canvas');
+const bgCvs  = document.getElementById('bg-grid');
+const ctx    = canvas.getContext('2d');
+const bgCtx  = bgCvs.getContext('2d');
+
+// ── Config ───────────────────────────────────────────────────────
+let SIGNAL_RADIUS = 140;
+let ANIM_SPEED    = 5;
+let packetCount   = 0;
+
+// ── Node colors (ESP32 themed) ───────────────────────────────────
+const NODE_COLORS = [
+  '#00ff88','#00eeff','#ffaa00','#ff88ff','#88ffff',
+  '#ffff00','#ff6644','#44ffaa','#aaaaff','#ff44aa'
+];
+
+// ── State ────────────────────────────────────────────────────────
+let nodes   = [];   // {id, x, y, label, color, alive}
+let packets = [];   // animated packets in flight
+let sosWaves= [];   // SOS ripple waves
+let nodeIdCounter = 0;
+
+// Drag state
+let dragging = null;
+let dragOffX = 0, dragOffY = 0;
+
+// ── Resize ───────────────────────────────────────────────────────
+function resize() {
+  canvas.width  = bgCvs.width  = wrap.clientWidth;
+  canvas.height = bgCvs.height = wrap.clientHeight;
+  drawGrid();
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── Grid background ──────────────────────────────────────────────
+function drawGrid() {
+  bgCtx.clearRect(0, 0, bgCvs.width, bgCvs.height);
+  bgCtx.strokeStyle = 'rgba(0,200,100,0.06)';
+  bgCtx.lineWidth = 1;
+  const step = 40;
+  for (let x = 0; x < bgCvs.width; x += step) {
+    bgCtx.beginPath(); bgCtx.moveTo(x, 0); bgCtx.lineTo(x, bgCvs.height); bgCtx.stroke();
+  }
+  for (let y = 0; y < bgCvs.height; y += step) {
+    bgCtx.beginPath(); bgCtx.moveTo(0, y); bgCtx.lineTo(bgCvs.width, y); bgCtx.stroke();
+  }
+  // Corner brackets
+  const b = 20, m = 14;
+  bgCtx.strokeStyle = 'rgba(0,255,136,0.2)';
+  bgCtx.lineWidth = 1.5;
+  [[0,0],[bgCvs.width,0],[0,bgCvs.height],[bgCvs.width,bgCvs.height]].forEach(([cx,cy]) => {
+    const sx = cx === 0 ? 1 : -1, sy = cy === 0 ? 1 : -1;
+    bgCtx.beginPath();
+    bgCtx.moveTo(cx + sx*b, cy + sy*m); bgCtx.lineTo(cx + sx*m, cy + sy*m);
+    bgCtx.lineTo(cx + sx*m, cy + sy*b); bgCtx.stroke();
+  });
+}
+
+// ── Helpers ───────────────────────────────────────────────────────
+function dist(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+function getNeighbors(node) {
+  return nodes.filter(n => n !== node && n.alive && dist(node, n) <= SIGNAL_RADIUS);
+}
+function getLinks() {
+  const links = [];
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      if (nodes[i].alive && nodes[j].alive && dist(nodes[i], nodes[j]) <= SIGNAL_RADIUS) {
+        links.push([nodes[i], nodes[j]]);
+      }
+    }
+  }
+  return links;
+}
+
+// BFS path finding
+function findPath(fromNode, toNode) {
+  if (fromNode === toNode) return [fromNode];
+  const visited = new Set([fromNode.id]);
+  const queue = [[fromNode, [fromNode]]];
+  while (queue.length) {
+    const [cur, path] = queue.shift();
+    for (const nb of getNeighbors(cur)) {
+      if (nb.id === toNode.id) return [...path, nb];
+      if (!visited.has(nb.id)) {
+        visited.add(nb.id);
+        queue.push([nb, [...path, nb]]);
+      }
+    }
+  }
+  return null; // no path
+}
+
+// ── Node management ───────────────────────────────────────────────
+function addNode(x, y, label) {
+  const id    = ++nodeIdCounter;
+  const color = NODE_COLORS[(id - 1) % NODE_COLORS.length];
+  const lbl   = label || `ESP-${String(id).padStart(2,'0')}`;
+  nodes.push({ id, x, y, label: lbl, color, alive: true, pulseR: 0, pulseAlpha: 0 });
+  updateUI();
+  addLog(`Node ${lbl} joined the mesh`, 'sys');
+  document.getElementById('hint').style.opacity = '0';
+}
+
+function removeNode(id) {
+  const n = nodes.find(n => n.id === id);
+  if (n) {
+    addLog(`Node ${n.label} removed from mesh`, 'sys');
+    nodes = nodes.filter(n => n.id !== id);
+    updateUI();
+  }
+}
+
+function addRandomNode() {
+  const pad = 60;
+  const x = pad + Math.random() * (canvas.width  - pad * 2);
+  const y = pad + Math.random() * (canvas.height - pad * 2);
+  addNode(x, y);
+}
+
+function clearAll() {
+  nodes = []; packets = []; sosWaves = []; nodeIdCounter = 0;
+  packetCount = 0;
+  updateUI();
+  addLog('Mesh reset', 'sys');
+  document.getElementById('hint').style.opacity = '1';
+}
+
+// ── Packet animation ──────────────────────────────────────────────
+function sendPacketAlongPath(path, color, label, type = 'msg') {
+  if (!path || path.length < 2) return;
+  packetCount++;
+  updateUI();
+
+  // Chain hop-by-hop with delays
+  for (let i = 0; i < path.length - 1; i++) {
+    const from = path[i];
+    const to   = path[i + 1];
+    const delay = i * (1200 / ANIM_SPEED);
+    setTimeout(() => {
+      // Flash source node
+      from.pulseR = 0; from.pulseAlpha = 1;
+      packets.push({
+        fromX: from.x, fromY: from.y,
+        toX:   to.x,   toY:   to.y,
+        progress: 0,
+        color,
+        type,
+        speed: 0.012 * ANIM_SPEED,
+        trail: [],
+      });
+      if (i === 0) {
+        addLog(`${type === 'sos' ? '🆘 SOS' : '📤'} ${from.label} → ${to.label}${path.length > 2 ? ' (relaying…)' : ''}`, type === 'sos' ? 'sos' : 'hop');
+      }
+      if (i === path.length - 2) {
+        setTimeout(() => {
+          addLog(`✅ Delivered to ${to.label} via ${path.length - 1} hop${path.length > 2 ? 's' : ''}`, 'msg');
+          to.pulseR = 0; to.pulseAlpha = 1;
+          document.getElementById('h-status').textContent = 'DELIVERED';
+          setTimeout(() => document.getElementById('h-status').textContent = 'IDLE', 2000);
+        }, 900 / ANIM_SPEED);
+      }
+    }, delay);
+  }
+}
+
+// Flood broadcast: send to ALL reachable nodes via BFS, animating each branch
+function floodBroadcast(source, color, type = 'msg') {
+  const visited = new Set([source.id]);
+  const queue   = [source];
+  let   hop     = 0;
+
+  function processLevel() {
+    if (!queue.length) return;
+    const level = [...queue];
+    queue.length = 0;
+    hop++;
+    const delay = (hop - 1) * (900 / ANIM_SPEED);
+
+    level.forEach(node => {
+      getNeighbors(node).forEach(nb => {
+        if (!visited.has(nb.id)) {
+          visited.add(nb.id);
+          queue.push(nb);
+          setTimeout(() => {
+            node.pulseR = 0; node.pulseAlpha = 1;
+            packets.push({
+              fromX: node.x, fromY: node.y,
+              toX:   nb.x,   toY:   nb.y,
+              progress: 0,
+              color,
+              type,
+              speed: 0.014 * ANIM_SPEED,
+              trail: [],
+            });
+          }, delay);
+        }
+      });
+    });
+
+    if (queue.length) setTimeout(processLevel, 900 / ANIM_SPEED);
+  }
+
+  processLevel();
+}
+
+// ── SOS ───────────────────────────────────────────────────────────
+function triggerSOS(sourceNode) {
+  const src = sourceNode || nodes[Math.floor(Math.random() * nodes.length)];
+  if (!src) return;
+
+  document.getElementById('sos-btn').classList.add('firing');
+  document.getElementById('h-status').textContent = '⚡ SOS';
+  document.getElementById('h-status').style.color = 'var(--red)';
+
+  // Ripple waves from source
+  for (let i = 0; i < 4; i++) {
+    setTimeout(() => {
+      sosWaves.push({ x: src.x, y: src.y, r: 0, alpha: 0.8, maxR: SIGNAL_RADIUS * 3.5 });
+    }, i * 300);
+  }
+
+  // SOS flash overlay
+  const flash = document.getElementById('sos-flash');
+  flash.style.opacity = '1';
+  setTimeout(() => { flash.style.opacity = '0'; }, 800);
+
+  // Flood SOS packets
+  floodBroadcast(src, '#ff2244', 'sos');
+  addLog(`🆘 SOS BROADCAST from ${src.label}!`, 'sos');
+
+  setTimeout(() => {
+    document.getElementById('sos-btn').classList.remove('firing');
+    document.getElementById('h-status').textContent = 'IDLE';
+    document.getElementById('h-status').style.color = 'var(--green)';
+  }, 5000);
+}
+
+// ── Send message (UI) ─────────────────────────────────────────────
+function sendMessage() {
+  const fromSel = document.getElementById('from-select');
+  const toSel   = document.getElementById('to-select');
+  const txt     = document.getElementById('msg-text').value.trim();
+  if (!txt) return;
+
+  const fromNode = nodes.find(n => n.id == fromSel.value);
+  if (!fromNode) { addLog('Select a FROM node first', 'sys'); return; }
+
+  document.getElementById('msg-text').value = '';
+  addLog(`MSG: "${txt}"`, 'msg');
+  document.getElementById('h-status').textContent = 'ROUTING…';
+
+  if (toSel.value === 'broadcast') {
+    floodBroadcast(fromNode, fromNode.color, 'msg');
+  } else {
+    const toNode = nodes.find(n => n.id == toSel.value);
+    if (!toNode) return;
+    const path = findPath(fromNode, toNode);
+    if (!path) {
+      addLog(`❌ No route from ${fromNode.label} to ${toNode.label}`, 'sys');
+      document.getElementById('h-status').textContent = 'NO ROUTE';
+      setTimeout(() => document.getElementById('h-status').textContent = 'IDLE', 2000);
+      return;
+    }
+    addLog(`Route: ${path.map(n=>n.label).join(' → ')}`, 'hop');
+    sendPacketAlongPath(path, fromNode.color, txt);
+  }
+}
+
+// ── UI update ─────────────────────────────────────────────────────
+function updateUI() {
+  const links = getLinks();
+  document.getElementById('h-nodes').textContent   = nodes.length;
+  document.getElementById('h-links').textContent   = links.length;
+  document.getElementById('h-packets').textContent = packetCount;
+
+  // Selects
+  const fromSel = document.getElementById('from-select');
+  const toSel   = document.getElementById('to-select');
+  const fromVal = fromSel.value;
+  const toVal   = toSel.value;
+
+  fromSel.innerHTML = '<option value="">FROM…</option>' +
+    nodes.map(n => `<option value="${n.id}">${n.label}</option>`).join('');
+  toSel.innerHTML   = '<option value="broadcast">BROADCAST</option>' +
+    nodes.map(n => `<option value="${n.id}">${n.label}</option>`).join('');
+
+  if (fromVal) fromSel.value = fromVal;
+  if (toVal)   toSel.value   = toVal;
+
+  // Node list
+  const list = document.getElementById('node-list-wrap');
+  list.innerHTML = nodes.map(n => `
+    <div class="node-row" onclick="focusNode(${n.id})">
+      <div class="node-dot" style="background:${n.color};color:${n.color}"></div>
+      <span class="node-row-name" style="color:${n.color}">${n.label}</span>
+      <span class="node-row-id">${getNeighbors(n).length} links</span>
+      <span class="node-row-del" onclick="event.stopPropagation();removeNode(${n.id})">✕</span>
+    </div>
+  `).join('') || '<div style="font-family:\'Share Tech Mono\',monospace;font-size:10px;color:rgba(0,255,136,0.2);padding:4px">No nodes</div>';
+}
+
+function focusNode(id) {
+  const n = nodes.find(n => n.id === id);
+  if (n) { n.pulseR = 0; n.pulseAlpha = 1; }
+}
+
+// ── Log ───────────────────────────────────────────────────────────
+function addLog(text, type = 'sys') {
+  const log  = document.getElementById('event-log-wrap');
+  const time = new Date().toLocaleTimeString('en-GB');
+  const div  = document.createElement('div');
+  div.className = `log-entry ${type}`;
+  div.innerHTML = `<span class="log-time">${time}</span>${text}`;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  // Keep last 80
+  while (log.children.length > 80) log.removeChild(log.firstChild);
+}
+
+// ── Controls ──────────────────────────────────────────────────────
+function updateSpeed(v) {
+  ANIM_SPEED = Number(v);
+  document.getElementById('speed-val').textContent = v;
+}
+function updateRadius(v) {
+  SIGNAL_RADIUS = Number(v);
+  document.getElementById('radius-val').textContent = v;
+  updateUI();
+}
+
+// ── Mouse / touch ─────────────────────────────────────────────────
+function nodeAt(x, y, radius = 18) {
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    if (Math.hypot(nodes[i].x - x, nodes[i].y - y) < radius) return nodes[i];
+  }
+  return null;
+}
+
+canvas.addEventListener('mousedown', e => {
+  const r   = canvas.getBoundingClientRect();
+  const mx  = e.clientX - r.left;
+  const my  = e.clientY - r.top;
+  const hit = nodeAt(mx, my);
+  if (hit) {
+    dragging = hit;
+    dragOffX = hit.x - mx;
+    dragOffY = hit.y - my;
+    canvas.style.cursor = 'grabbing';
+  } else {
+    addNode(mx, my);
+  }
+});
+
+canvas.addEventListener('mousemove', e => {
+  const r  = canvas.getBoundingClientRect();
+  const mx = e.clientX - r.left;
+  const my = e.clientY - r.top;
+
+  document.getElementById('coords').textContent = `X:${Math.round(mx)} Y:${Math.round(my)}`;
+
+  if (dragging) {
+    dragging.x = mx + dragOffX;
+    dragging.y = my + dragOffY;
+    updateUI();
+    return;
+  }
+
+  const hit = nodeAt(mx, my);
+  const tip = document.getElementById('tooltip');
+  if (hit) {
+    canvas.style.cursor = 'grab';
+    tip.style.display = 'block';
+    tip.style.left = (e.clientX - r.left + 14) + 'px';
+    tip.style.top  = (e.clientY - r.top  - 10) + 'px';
+    tip.textContent = `${hit.label}  |  ${getNeighbors(hit).length} neighbors`;
+  } else {
+    canvas.style.cursor = 'crosshair';
+    tip.style.display = 'none';
+  }
+});
+
+canvas.addEventListener('mouseup', () => {
+  dragging = null;
+  canvas.style.cursor = 'crosshair';
+});
+
+canvas.addEventListener('mouseleave', () => {
+  dragging = null;
+  document.getElementById('tooltip').style.display = 'none';
+});
+
+// Right-click = SOS from that node
+canvas.addEventListener('contextmenu', e => {
+  e.preventDefault();
+  const r   = canvas.getBoundingClientRect();
+  const hit = nodeAt(e.clientX - r.left, e.clientY - r.top);
+  if (hit) triggerSOS(hit);
+});
+
+// ── RENDER LOOP ───────────────────────────────────────────────────
+function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const links = getLinks();
+
+  // ── Draw signal radius rings ──────────────────────────────────
+  nodes.forEach(node => {
+    const grad = ctx.createRadialGradient(node.x, node.y, SIGNAL_RADIUS * 0.7, node.x, node.y, SIGNAL_RADIUS);
+    grad.addColorStop(0, 'transparent');
+    grad.addColorStop(1, hexAlpha(node.color, 0.06));
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, SIGNAL_RADIUS, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, SIGNAL_RADIUS, 0, Math.PI * 2);
+    ctx.strokeStyle = hexAlpha(node.color, 0.12);
+    ctx.lineWidth   = 1;
+    ctx.setLineDash([4, 8]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  });
+
+  // ── Draw links ────────────────────────────────────────────────
+  links.forEach(([a, b]) => {
+    const grad = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+    grad.addColorStop(0, hexAlpha(a.color, 0.35));
+    grad.addColorStop(1, hexAlpha(b.color, 0.35));
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.strokeStyle = grad;
+    ctx.lineWidth   = 1.5;
+    ctx.stroke();
+
+    // Midpoint label: distance
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    const d  = Math.round(dist(a, b));
+    ctx.fillStyle = 'rgba(0,255,136,0.25)';
+    ctx.font      = '9px Share Tech Mono';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${d}m`, mx, my - 4);
+  });
+
+  // ── SOS waves ─────────────────────────────────────────────────
+  sosWaves = sosWaves.filter(w => w.alpha > 0.01);
+  sosWaves.forEach(w => {
+    ctx.beginPath();
+    ctx.arc(w.x, w.y, w.r, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(255,34,68,${w.alpha})`;
+    ctx.lineWidth   = 2;
+    ctx.stroke();
+    w.r     += 3.5;
+    w.alpha *= 0.95;
+  });
+
+  // ── Packets ────────────────────────────────────────────────────
+  packets = packets.filter(p => p.progress < 1);
+  packets.forEach(p => {
+    p.progress = Math.min(1, p.progress + p.speed);
+    const x = p.fromX + (p.toX - p.fromX) * p.progress;
+    const y = p.fromY + (p.toY - p.fromY) * p.progress;
+
+    // Trail
+    p.trail.push({ x, y, a: 1 });
+    if (p.trail.length > 18) p.trail.shift();
+    p.trail.forEach((pt, i) => {
+      const a = (i / p.trail.length) * 0.5;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = hexAlpha(p.color, a);
+      ctx.fill();
+    });
+
+    // Packet dot
+    ctx.beginPath();
+    ctx.arc(x, y, p.type === 'sos' ? 7 : 5, 0, Math.PI * 2);
+    ctx.fillStyle   = p.color;
+    ctx.shadowColor = p.color;
+    ctx.shadowBlur  = p.type === 'sos' ? 20 : 12;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  });
+
+  // ── Node pulse rings ──────────────────────────────────────────
+  nodes.forEach(node => {
+    if (node.pulseAlpha > 0.01) {
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, node.pulseR, 0, Math.PI * 2);
+      ctx.strokeStyle = hexAlpha(node.color, node.pulseAlpha);
+      ctx.lineWidth   = 2;
+      ctx.stroke();
+      node.pulseR     += 2.5;
+      node.pulseAlpha *= 0.93;
+    }
+  });
+
+  // ── Draw nodes ────────────────────────────────────────────────
+  nodes.forEach(node => {
+    // Outer glow ring
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, 16, 0, Math.PI * 2);
+    ctx.fillStyle   = hexAlpha(node.color, 0.12);
+    ctx.fill();
+
+    // Main circle
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, 11, 0, Math.PI * 2);
+    ctx.fillStyle   = '#020a05';
+    ctx.fill();
+    ctx.strokeStyle = node.color;
+    ctx.lineWidth   = 2;
+    ctx.shadowColor = node.color;
+    ctx.shadowBlur  = 10;
+    ctx.stroke();
+    ctx.shadowBlur  = 0;
+
+    // Inner dot
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = node.color;
+    ctx.fill();
+
+    // Label
+    ctx.fillStyle = node.color;
+    ctx.font      = 'bold 10px Share Tech Mono';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = 'rgba(0,0,0,0.8)';
+    ctx.shadowBlur  = 4;
+    ctx.fillText(node.label, node.x, node.y + 26);
+    ctx.shadowBlur = 0;
+
+    // Neighbor count badge
+    const nb = getNeighbors(node).length;
+    if (nb > 0) {
+      ctx.fillStyle = hexAlpha(node.color, 0.7);
+      ctx.font      = '8px Share Tech Mono';
+      ctx.fillText(`${nb}✦`, node.x + 14, node.y - 10);
+    }
+  });
+
+  requestAnimationFrame(render);
+}
+
+// ── Utility ───────────────────────────────────────────────────────
+function hexAlpha(hex, alpha) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+// ── Clock ─────────────────────────────────────────────────────────
+setInterval(() => {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString('en-GB');
+}, 1000);
+
+// ── Bootstrap demo ────────────────────────────────────────────────
+function bootDemo() {
+  const W = canvas.width, H = canvas.height;
+  // Place 4 nodes in a loose chain
+  addNode(W*0.18, H*0.45, 'ESP-01');
+  addNode(W*0.38, H*0.30, 'ESP-02');
+  addNode(W*0.55, H*0.55, 'ESP-03');
+  addNode(W*0.72, H*0.35, 'ESP-04');
+  addLog('Demo mesh loaded — drag nodes, click to add more, right-click a node for SOS', 'sys');
+  updateUI();
+}
+
+render();
+setTimeout(bootDemo, 100);
+</script>
+</body>
+</html>
