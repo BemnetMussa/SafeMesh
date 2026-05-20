@@ -2,31 +2,36 @@
   import {
     Send, Radio, SlidersHorizontal, Activity, Trash2, Crosshair,
     Play, Pause, SkipForward, RotateCcw, Power, Zap, Bell,
+    Layers, Download, Copy, FolderOpen, FileText,
   } from 'lucide-svelte';
   import {
-    nodes, logs, signalRadius, simulationConfig, selectedNodeId, events,
+    nodes, logs, signalRadius, simulationConfig, selectedNodeId, events, messages,
     removeNode, sendPacketAlongPath, floodBroadcast, findPath, addLog,
-    type Node,
+    flashFail, recordFailedMessage,
+    loadPreset, downloadScenario, copyScenarioToClipboard, importScenario,
+    type Node, type PresetName,
   } from '../lib/engine';
   import type { LogEntry } from '../lib/engine';
-  import type { SimulationConfig, MeshEvent } from '../types';
+  import type { SimulationConfig, MeshEvent, MeshMessage, MeshScenario } from '../types';
   import {
     play, pause, step, resetSim, setSpeed,
     toggleNodeStatus, drainBattery,
   } from '../lib/simulation';
 
   // ─── Store subscriptions ─────────────────────────────────────────────────
-  let nList:     Node[]          = [];
-  let logList:   LogEntry[]      = [];
-  let eventList: MeshEvent[]     = [];
+  let nList:       Node[]        = [];
+  let logList:     LogEntry[]    = [];
+  let eventList:   MeshEvent[]   = [];
+  let messageList: MeshMessage[] = [];
   let rVal    = 150;
   let simCfg: SimulationConfig   = { speed: 1, status: 'idle', tick: 0, seed: 0 };
 
-  nodes.subscribe(n          => nList     = n);
-  logs.subscribe(l           => logList   = l);
-  events.subscribe(evs       => eventList = [...evs].reverse());
-  signalRadius.subscribe(r   => rVal      = r);
-  simulationConfig.subscribe(c => simCfg  = c);
+  nodes.subscribe(n          => nList        = n);
+  logs.subscribe(l           => logList      = l);
+  events.subscribe(evs       => eventList    = [...evs].reverse());
+  messages.subscribe(ms      => messageList  = [...ms].reverse());
+  signalRadius.subscribe(r   => rVal         = r);
+  simulationConfig.subscribe(c => simCfg     = c);
 
   // ─── Transmit ───────────────────────────────────────────────────────────
   let fromNode = '';
@@ -61,7 +66,12 @@
       const dest = $nodes.find(n => n.id === toNode);
       if (!dest) return;
       const path = findPath(src, dest);
-      if (!path) { addLog(`❌ No route from ${src.label} to ${dest.label}`, 'sys'); return; }
+      if (!path) {
+        addLog(`❌ No route from ${src.label} to ${dest.label}`, 'sys');
+        recordFailedMessage(src.id, dest.id, message);
+        flashFail(src.x, src.y);
+        return;
+      }
       sendPacketAlongPath(path, src.color, message, 'msg');
     }
     message = '';
@@ -81,7 +91,7 @@
   }
 
   // ─── Log tabs ───────────────────────────────────────────────────────────
-  let logTab: 'logs' | 'events' | 'alerts' = 'logs';
+  let logTab: 'logs' | 'events' | 'alerts' | 'messages' = 'logs';
 
   $: alertNodes  = nList.filter(n => n.status !== 'online');
   $: alertEvents = eventList.filter(ev => ev.severity === 'critical').slice(0, 20);
@@ -95,12 +105,74 @@
     return new Date(ts).toLocaleTimeString('en-US', { hour12: false });
   }
 
+  function nodeLabel(id: string | undefined): string {
+    if (!id) return 'All';
+    return nList.find(n => n.id === id)?.label ?? `#${id}`;
+  }
+
   // ─── Sim status ─────────────────────────────────────────────────────────
   $: simStatusClass = simCfg.status === 'running'
     ? 'status-running'
     : simCfg.status === 'paused'
     ? 'status-paused'
     : 'status-idle';
+
+  // ─── Scenarios ──────────────────────────────────────────────────────────
+  let selectedPreset: PresetName = 'star';
+  let scenarioName = '';
+  let copyFeedback = false;
+  let pasteMode    = false;
+  let pasteJson    = '';
+  let importError  = '';
+  let fileInput: HTMLInputElement;
+
+  function handleLoadPreset() {
+    const w = Math.max(600, window.innerWidth  - 324 - 48);
+    const h = Math.max(400, window.innerHeight -  44 - 48);
+    loadPreset(selectedPreset, w, h);
+  }
+
+  async function handleCopy() {
+    const ok = await copyScenarioToClipboard(scenarioName);
+    if (ok) { copyFeedback = true; setTimeout(() => copyFeedback = false, 1600); }
+  }
+
+  function togglePasteMode() {
+    pasteMode   = !pasteMode;
+    pasteJson   = '';
+    importError = '';
+  }
+
+  function handleFileChange(e: Event) {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target?.result as string) as MeshScenario;
+        if (!data.nodes || !data.version) { importError = 'Invalid scenario format'; return; }
+        importScenario(data);
+        importError = '';
+      } catch {
+        importError = 'Failed to parse file';
+      }
+    };
+    reader.readAsText(file);
+    (e.target as HTMLInputElement).value = '';
+  }
+
+  function handlePasteImport() {
+    try {
+      const data = JSON.parse(pasteJson) as MeshScenario;
+      if (!data.nodes || !data.version) { importError = 'Invalid scenario format'; return; }
+      importScenario(data);
+      pasteMode   = false;
+      pasteJson   = '';
+      importError = '';
+    } catch {
+      importError = 'Invalid JSON — check and try again';
+    }
+  }
 </script>
 
 <aside class="floating-hud">
@@ -182,6 +254,62 @@
       </div>
     </section>
 
+    <!-- Scenarios -->
+    <section>
+      <div class="section-title"><Layers size={14} /> Scenarios</div>
+
+      <div class="sub-label">Presets</div>
+      <div class="preset-row">
+        <select bind:value={selectedPreset}>
+          <option value="star">Star — hub + 5 spokes</option>
+          <option value="chain">Linear Chain — 6 nodes</option>
+          <option value="mesh">Full Mesh — 5 nodes</option>
+          <option value="ring">Ring — 6 nodes</option>
+        </select>
+        <button class="btn-preset" on:click={handleLoadPreset}>Load</button>
+      </div>
+
+      <div class="sub-label">Export</div>
+      <input type="text" placeholder="Scenario name…" bind:value={scenarioName} />
+      <div class="sc-btns">
+        <button class="btn-sc" on:click={() => downloadScenario(scenarioName)}>
+          <Download size={12} /> Download
+        </button>
+        <button class="btn-sc" class:btn-sc-ok={copyFeedback} on:click={handleCopy}>
+          <Copy size={12} /> {copyFeedback ? 'Copied!' : 'Copy JSON'}
+        </button>
+      </div>
+
+      <div class="sub-label">Import</div>
+      <div class="sc-btns">
+        <button class="btn-sc" on:click={() => fileInput.click()}>
+          <FolderOpen size={12} /> Open File
+        </button>
+        <button class="btn-sc" class:btn-sc-active={pasteMode} on:click={togglePasteMode}>
+          <FileText size={12} /> Paste JSON
+        </button>
+      </div>
+      <input bind:this={fileInput} type="file" accept=".json" style="display:none"
+        on:change={handleFileChange} />
+
+      {#if pasteMode}
+        <textarea
+          bind:value={pasteJson}
+          placeholder="Paste scenario JSON here…"
+          class="paste-ta"
+          rows={4}
+          spellcheck="false"
+        ></textarea>
+        <button class="btn-load-paste" on:click={handlePasteImport} disabled={!pasteJson.trim()}>
+          Load Scenario
+        </button>
+      {/if}
+
+      {#if importError}
+        <div class="import-err">{importError}</div>
+      {/if}
+    </section>
+
     <!-- Active Cluster -->
     <section class="nodes-section">
       <div class="section-title"><Crosshair size={14} /> Active Cluster</div>
@@ -246,6 +374,13 @@
           <span class="tab-badge">{alertCount}</span>
         {/if}
       </button>
+      <button class="log-tab" class:log-tab-active={logTab === 'messages'}
+        on:click={() => logTab = 'messages'}>
+        Messages
+        {#if messageList.length > 0}
+          <span class="tab-count-neutral">{messageList.length}</span>
+        {/if}
+      </button>
     </div>
 
     <!-- Logs tab -->
@@ -278,7 +413,7 @@
       </div>
 
     <!-- Alerts tab -->
-    {:else}
+    {:else if logTab === 'alerts'}
       <div class="log-scroll">
         {#if alertNodes.length === 0 && alertEvents.length === 0}
           <div class="tab-empty no-alerts">✓ No active alerts</div>
@@ -306,6 +441,30 @@
               </div>
             {/each}
           {/if}
+        {/if}
+      </div>
+
+    <!-- Messages tab -->
+    {:else}
+      <div class="log-scroll">
+        {#if messageList.length === 0}
+          <div class="tab-empty">No messages yet. Transmit a message to see history.</div>
+        {:else}
+          {#each messageList as msg (msg.id)}
+            <div class="msg-entry msg-status-{msg.status}">
+              <div class="msg-top">
+                <span class="msg-type-badge msg-type-{msg.type}">{msg.type}</span>
+                <span class="msg-route">
+                  {nodeLabel(msg.origin)} → {nodeLabel(msg.destination)}
+                </span>
+                <span class="msg-status-pill msg-pill-{msg.status}">{msg.status}</span>
+              </div>
+              <div class="msg-bottom">
+                <span class="msg-hops">{msg.hops.length - 1} hop{msg.hops.length !== 2 ? 's' : ''}</span>
+                <span class="msg-time">{timeStr(msg.timestamp)}</span>
+              </div>
+            </div>
+          {/each}
         {/if}
       </div>
     {/if}
@@ -593,4 +752,115 @@
   .alert-tag  { font-size: 9px; font-weight: 600; text-transform: uppercase;
                 color: var(--text-dim); background: rgba(255,255,255,0.05);
                 padding: 1px 5px; border-radius: 3px; }
+
+  /* ── Neutral tab count badge ── */
+  .tab-count-neutral {
+    background: rgba(255,255,255,0.1); color: var(--text-muted);
+    font-size: 9px; font-weight: 700;
+    padding: 1px 5px; border-radius: 10px;
+    min-width: 16px; text-align: center;
+  }
+
+  /* ── Message entries ── */
+  .msg-entry {
+    display: flex; flex-direction: column; gap: 3px;
+    padding: 7px 10px; border-radius: 6px;
+    background: rgba(0,0,0,0.2); border-left: 2px solid transparent;
+    animation: fadeIn 0.25s ease;
+  }
+  .msg-status-delivered { border-left-color: var(--accent-success); }
+  .msg-status-failed    { border-left-color: var(--accent-danger);  background: rgba(244,63,94,0.04); }
+  .msg-status-in-flight { border-left-color: var(--accent-primary); }
+  .msg-status-queued    { border-left-color: rgba(255,255,255,0.12); }
+
+  .msg-top {
+    display: flex; align-items: center; gap: 6px;
+    overflow: hidden;
+  }
+
+  .msg-route {
+    flex: 1; font-family: var(--font-mono); font-size: 10px;
+    color: var(--text-muted); white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .msg-type-badge {
+    font-size: 9px; font-weight: 700; text-transform: uppercase;
+    padding: 1px 5px; border-radius: 3px; flex-shrink: 0; letter-spacing: 0.3px;
+  }
+  .msg-type-unicast   { background: rgba(14,165,233,0.14);  color: var(--accent-primary); }
+  .msg-type-broadcast { background: rgba(52,211,153,0.14);  color: var(--accent-success); }
+  .msg-type-sos       { background: rgba(244,63,94,0.14);   color: var(--accent-danger);  }
+
+  .msg-status-pill {
+    font-size: 9px; font-weight: 600; padding: 1px 5px;
+    border-radius: 3px; flex-shrink: 0; text-transform: uppercase; letter-spacing: 0.3px;
+  }
+  .msg-pill-delivered { background: rgba(16,185,129,0.14);  color: var(--accent-success); }
+  .msg-pill-failed    { background: rgba(244,63,94,0.14);   color: var(--accent-danger);  }
+  .msg-pill-in-flight { background: rgba(14,165,233,0.14);  color: var(--accent-primary); }
+  .msg-pill-queued    { background: rgba(255,255,255,0.07); color: var(--text-dim); }
+
+  .msg-bottom {
+    display: flex; justify-content: space-between;
+    font-family: var(--font-mono); font-size: 9px; color: var(--text-dim);
+  }
+
+  /* ── Scenario section ── */
+  .sub-label {
+    font-size: 9px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.7px; color: var(--text-dim);
+    padding-bottom: 2px; border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+
+  .preset-row { display: flex; gap: 8px; }
+
+  .btn-preset {
+    background: rgba(14,165,233,0.1); border: 1px solid rgba(14,165,233,0.2);
+    border-radius: 6px; color: var(--accent-primary); cursor: pointer;
+    font-size: 12px; font-weight: 600; padding: 7px 14px;
+    white-space: nowrap; transition: all 0.15s; flex-shrink: 0;
+  }
+  .btn-preset:hover { background: rgba(14,165,233,0.18); }
+
+  .sc-btns { display: flex; gap: 8px; }
+
+  .btn-sc {
+    flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;
+    background: rgba(255,255,255,0.04); border: 1px solid var(--panel-border);
+    border-radius: 6px; color: var(--text-muted); cursor: pointer;
+    font-size: 11px; font-weight: 500; padding: 7px 6px;
+    transition: all 0.15s; white-space: nowrap;
+  }
+  .btn-sc:hover    { background: rgba(255,255,255,0.09); color: var(--text-main); }
+  .btn-sc-ok       { background: rgba(16,185,129,0.1) !important; border-color: rgba(16,185,129,0.25) !important;
+                     color: var(--accent-success) !important; }
+  .btn-sc-active   { background: rgba(14,165,233,0.08) !important; border-color: rgba(14,165,233,0.2) !important;
+                     color: var(--accent-primary) !important; }
+
+  .paste-ta {
+    width: 100%; box-sizing: border-box;
+    background: rgba(0,0,0,0.25); border: 1px solid var(--panel-border);
+    border-radius: 6px; color: var(--text-main);
+    font-family: var(--font-mono); font-size: 11px; line-height: 1.5;
+    padding: 8px 10px; resize: vertical; outline: none;
+    transition: border-color 0.2s;
+  }
+  .paste-ta:focus { border-color: var(--accent-primary); }
+  .paste-ta::placeholder { color: var(--text-dim); }
+
+  .btn-load-paste {
+    width: 100%; background: rgba(14,165,233,0.1);
+    border: 1px solid rgba(14,165,233,0.2); border-radius: 6px;
+    color: var(--accent-primary); cursor: pointer; font-size: 12px;
+    font-weight: 600; padding: 8px; transition: all 0.15s;
+  }
+  .btn-load-paste:hover:not(:disabled) { background: rgba(14,165,233,0.18); }
+  .btn-load-paste:disabled { opacity: 0.4; cursor: default; }
+
+  .import-err {
+    font-size: 11px; color: var(--accent-danger);
+    background: rgba(244,63,94,0.08); border: 1px solid rgba(244,63,94,0.2);
+    border-radius: 5px; padding: 6px 10px;
+  }
 </style>

@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-svelte';
   import {
-    nodes, links, packets, sosWaves, signalRadius,
+    nodes, links, packets, sosWaves, failureFlashes, signalRadius,
     addNode, triggerSOS, type Node,
   } from '../lib/engine';
   import type { MeshLink } from '../types';
@@ -19,21 +19,23 @@
 
   // ─── Store state ─────────────────────────────────────────────────────────
   let sRadius      = 150;
-  let currentNodes: Node[]     = [];
-  let currentLinks: MeshLink[] = [];
-  let currentPackets: any[]    = [];
-  let currentWaves:  any[]     = [];
+  let currentNodes:   Node[]     = [];
+  let currentLinks:   MeshLink[] = [];
+  let currentPackets: any[]      = [];
+  let currentWaves:   any[]      = [];
+  let currentFlashes: any[]      = [];
   let nodeMap = new Map<string, Node>();
 
   const unsubs = [
-    signalRadius.subscribe(r => sRadius = r),
+    signalRadius.subscribe(r  => sRadius         = r),
     nodes.subscribe(n => {
       currentNodes = n;
       nodeMap = new Map(n.map(nd => [nd.id, nd]));
     }),
-    links.subscribe(l  => currentLinks  = l),
-    packets.subscribe(p => currentPackets = p),
-    sosWaves.subscribe(w => currentWaves  = w),
+    links.subscribe(l          => currentLinks   = l),
+    packets.subscribe(p        => currentPackets = p),
+    sosWaves.subscribe(w       => currentWaves   = w),
+    failureFlashes.subscribe(f => currentFlashes = f),
   ];
 
   // ─── Camera ───────────────────────────────────────────────────────────────
@@ -371,6 +373,31 @@
       ctx.fillText(n.label, n.x, n.y + 26);
 
       ctx.globalAlpha = 1;
+    });
+
+    // 5. Failure flashes (expanding red ring + fading × mark)
+    const liveFlashes = currentFlashes.filter(f => f.alpha > 0.01);
+    failureFlashes.set(liveFlashes);
+    liveFlashes.forEach(f => {
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, 8 + f.r, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(244,63,94,${f.alpha})`;
+      ctx.lineWidth   = 2;
+      ctx.stroke();
+
+      if (f.xAlpha > 0.01) {
+        const s = 11;
+        ctx.strokeStyle = `rgba(244,63,94,${f.xAlpha})`;
+        ctx.lineWidth   = 2.5;
+        ctx.lineCap     = 'round';
+        ctx.beginPath(); ctx.moveTo(f.x - s, f.y - s); ctx.lineTo(f.x + s, f.y + s); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(f.x + s, f.y - s); ctx.lineTo(f.x - s, f.y + s); ctx.stroke();
+        ctx.lineCap     = 'butt';
+        f.xAlpha *= 0.84;
+      }
+
+      f.r    += 2.5;
+      f.alpha *= 0.88;
     });
 
     ctx.restore(); // end camera transform

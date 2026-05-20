@@ -9,6 +9,7 @@ import type {
   MeshMessageType,
   MeshMessageStatus,
   SimulationConfig,
+  MeshScenario,
 } from '../types';
 
 // ─── Backward-compat alias ───────────────────────────────────────────────────
@@ -43,6 +44,7 @@ export const nodes          = writable<MeshNode[]>([]);
 export const links          = writable<MeshLink[]>([]);
 export const packets        = writable<any[]>([]);
 export const sosWaves       = writable<any[]>([]);
+export const failureFlashes = writable<{ x: number; y: number; r: number; alpha: number; xAlpha: number }[]>([]);
 
 export const packetCount    = writable(0);
 export const globalStatus   = writable<'IDLE' | 'ROUTING' | 'DELIVERED' | 'NO ROUTE' | 'SOS'>('IDLE');
@@ -222,6 +224,7 @@ export function clearAll(): void {
   links.set([]);
   packets.set([]);
   sosWaves.set([]);
+  failureFlashes.set([]);
   events.set([]);
   messages.set([]);
   packetCount.set(0);
@@ -430,6 +433,32 @@ export async function floodBroadcast(
   }, 1000);
 }
 
+// ─── Failure flash ────────────────────────────────────────────────────────────
+
+export function flashFail(x: number, y: number): void {
+  failureFlashes.update(ff => [
+    ...ff,
+    { x, y, r: 0,  alpha: 0.85, xAlpha: 1.0 },
+    { x, y, r: 14, alpha: 0.40, xAlpha: 0   },
+  ]);
+}
+
+// ─── Failed message record ────────────────────────────────────────────────────
+
+export function recordFailedMessage(origin: string, destination: string, content: string): void {
+  const msg: MeshMessage = {
+    id:          String(++messageIdCounter),
+    type:        'unicast',
+    origin,
+    destination,
+    content,
+    hops:        [origin],
+    status:      'failed',
+    timestamp:   Date.now(),
+  };
+  messages.update(ms => [...ms, msg]);
+}
+
 // ─── SOS ─────────────────────────────────────────────────────────────────────
 
 export function triggerSOS(sourceNode?: MeshNode): void {
@@ -461,4 +490,127 @@ export function bootDemo(w: number, h: number): void {
     addNode(w * 0.8, h * 0.45, 'Delta');
     addLog('SafeMesh cluster initialized', 'sys');
   }, 100);
+}
+
+// ─── Preset topologies ───────────────────────────────────────────────────────
+
+export type PresetName = 'star' | 'chain' | 'mesh' | 'ring';
+
+const PRESET_LABELS = ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta'];
+
+export function loadPreset(preset: PresetName, w: number, h: number): void {
+  clearAll();
+  logs.set([]);
+
+  const cx = w / 2;
+  const cy = h / 2;
+
+  setTimeout(() => {
+    switch (preset) {
+      case 'star': {
+        addNode(cx, cy, 'Hub');
+        for (let i = 0; i < 5; i++) {
+          const angle = (i * Math.PI * 2) / 5 - Math.PI / 2;
+          addNode(cx + Math.cos(angle) * 130, cy + Math.sin(angle) * 130, PRESET_LABELS[i]);
+        }
+        break;
+      }
+      case 'chain': {
+        const spacing = 130;
+        const startX  = cx - (spacing * (PRESET_LABELS.length - 1)) / 2;
+        PRESET_LABELS.forEach((lbl, i) => addNode(startX + i * spacing, cy, lbl));
+        break;
+      }
+      case 'mesh': {
+        // All 5 nodes within 140 px of every other node (radius 90 px)
+        addNode(cx, cy, 'Core');
+        for (let i = 0; i < 4; i++) {
+          const angle = (i * Math.PI * 2) / 4 - Math.PI / 4;
+          addNode(cx + Math.cos(angle) * 90, cy + Math.sin(angle) * 90, PRESET_LABELS[i]);
+        }
+        break;
+      }
+      case 'ring': {
+        // Hex ring — only adjacent pairs fall within default signal radius (150 px)
+        for (let i = 0; i < PRESET_LABELS.length; i++) {
+          const angle = (i * Math.PI * 2) / PRESET_LABELS.length - Math.PI / 2;
+          addNode(cx + Math.cos(angle) * 120, cy + Math.sin(angle) * 120, PRESET_LABELS[i]);
+        }
+        break;
+      }
+    }
+    addLog(`Preset "${preset}" loaded`, 'sys');
+  }, 100);
+}
+
+// ─── Scenario export ──────────────────────────────────────────────────────────
+
+export function exportScenario(name: string): MeshScenario {
+  return {
+    version:    '1.0',
+    name:       name.trim() || 'Untitled Scenario',
+    created_at: Date.now(),
+    nodes:      get(nodes),
+    links:      get(links),
+    events:     get(events),
+    messages:   get(messages),
+    simulation: get(simulationConfig),
+  };
+}
+
+export function downloadScenario(name: string): void {
+  const data  = exportScenario(name);
+  const blob  = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url   = URL.createObjectURL(blob);
+  const a     = document.createElement('a');
+  a.href      = url;
+  a.download  = `${(data.name).replace(/\s+/g, '-').toLowerCase()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  addLog(`Scenario "${data.name}" exported`, 'sys');
+}
+
+export async function copyScenarioToClipboard(name: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(exportScenario(name), null, 2));
+    addLog('Scenario JSON copied to clipboard', 'sys');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ─── Scenario import ──────────────────────────────────────────────────────────
+
+export function importScenario(data: MeshScenario): void {
+  simulationConfig.update(c => ({ ...c, status: 'idle' }));
+
+  // Re-sync ID counters so new additions don't collide
+  nodeIdCounter = (data.nodes ?? []).reduce((max, n) => {
+    const num = parseInt(n.id);
+    return isNaN(num) ? max : Math.max(max, num);
+  }, 0);
+  eventIdCounter = (data.events ?? []).reduce((max, e) => {
+    const num = parseInt(e.id);
+    return isNaN(num) ? max : Math.max(max, num);
+  }, 0);
+  messageIdCounter = (data.messages ?? []).reduce((max, m) => {
+    const num = parseInt(m.id);
+    return isNaN(num) ? max : Math.max(max, num);
+  }, 0);
+
+  nodes.set((data.nodes ?? []).map(n => ({ ...n, pulseR: 0, pulseAlpha: 0 })));
+  packets.set([]);
+  sosWaves.set([]);
+  failureFlashes.set([]);
+  events.set(data.events ?? []);
+  messages.set(data.messages ?? []);
+  simulationConfig.set({
+    ...(data.simulation ?? { speed: 1, tick: 0, seed: Date.now() }),
+    status: 'idle',
+  });
+  logs.set([]);
+  selectedNodeId.set(null);
+
+  addLog(`Scenario "${data.name}" loaded — ${(data.nodes ?? []).length} nodes`, 'sys');
 }
