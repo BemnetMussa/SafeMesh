@@ -4,11 +4,13 @@
   } from 'lucide-svelte';
   import { 
     nodes, logs, signalRadius, animSpeed, 
-    removeNode, sendPacketAlongPath, floodBroadcast, findPath, addLog
+    removeNode, sendPacketAlongPath, floodBroadcast, findPath, addLog,
+    type Node,
   } from '../lib/engine';
+  import type { LogEntry } from '../lib/engine';
 
-  let nList = [];
-  let logList = [];
+  let nList: Node[]       = [];
+  let logList: LogEntry[] = [];
   let rVal = 150;
   let sVal = 6;
   
