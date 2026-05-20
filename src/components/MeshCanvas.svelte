@@ -4,6 +4,7 @@
     nodes, links, packets, sosWaves, signalRadius, 
     addNode, triggerSOS, type Node 
   } from '../lib/engine';
+  import type { MeshLink } from '../types';
 
   let canvas: HTMLCanvasElement;
   let bgCanvas: HTMLCanvasElement;
@@ -15,13 +16,17 @@
   let sRadius = 150;
   
   let currentNodes: Node[] = [];
-  let currentLinks = [];
+  let currentLinks: MeshLink[] = [];
   let currentPackets = [];
   let currentWaves = [];
+  let nodeMap = new Map<string, Node>();
 
   const unsubs = [
     signalRadius.subscribe(r => sRadius = r),
-    nodes.subscribe(n => currentNodes = n),
+    nodes.subscribe(n => {
+      currentNodes = n;
+      nodeMap = new Map(n.map(node => [node.id, node]));
+    }),
     links.subscribe(l => currentLinks = l),
     packets.subscribe(p => currentPackets = p),
     sosWaves.subscribe(w => currentWaves = w)
@@ -90,21 +95,29 @@
     ctx.clearRect(0, 0, w, h);
 
     // 1. Draw Links
-    currentLinks.forEach(([a, b]) => {
+    currentLinks.forEach(link => {
+      const a = nodeMap.get(link.source);
+      const b = nodeMap.get(link.target);
+      if (!a || !b) return;
+
+      // Quality-encoded visual: stronger link = brighter + thicker
+      const alpha     = 0.15 + link.quality * 0.45; // 0.15 → 0.60
+      const lineWidth = 0.8 + link.quality * 1.7;   // 0.8  → 2.5
+
       const grad = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
-      grad.addColorStop(0, hexAlpha(a.color, 0.4));
-      grad.addColorStop(1, hexAlpha(b.color, 0.4));
+      grad.addColorStop(0, hexAlpha(a.color, alpha));
+      grad.addColorStop(1, hexAlpha(b.color, alpha));
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
       ctx.strokeStyle = grad;
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = lineWidth;
       ctx.stroke();
 
       const mx = (a.x + b.x) / 2;
       const my = (a.y + b.y) / 2;
-      const d = Math.round(Math.hypot(a.x - b.x, a.y - b.y));
-      ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      const d  = Math.round(Math.hypot(a.x - b.x, a.y - b.y));
+      ctx.fillStyle = `rgba(255,255,255,${0.15 + link.quality * 0.2})`;
       ctx.font = '10px "JetBrains Mono", monospace';
       ctx.textAlign = 'center';
       ctx.fillText(`${d}m`, mx, my - 4);
