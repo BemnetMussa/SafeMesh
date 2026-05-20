@@ -37,6 +37,7 @@ const LOW_BATTERY_WARN  = 25;
 
 export const signalRadius   = writable(150);
 export const animSpeed      = writable(6);
+export const selectedNodeId = writable<string | null>(null);
 
 export const nodes          = writable<MeshNode[]>([]);
 export const links          = writable<MeshLink[]>([]);
@@ -196,6 +197,7 @@ export function removeNode(id: string): void {
     }
     return ns.filter(n => n.id !== id);
   });
+  if (get(selectedNodeId) === id) selectedNodeId.set(null);
 }
 
 export function updateNodeStatus(id: string, status: MeshNode['status']): void {

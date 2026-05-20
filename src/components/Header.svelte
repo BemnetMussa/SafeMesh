@@ -6,8 +6,12 @@
   let nLinks = 0;
   let nPackets = 0;
   let currentStatus = 'IDLE';
+  let alertCount = 0;
 
-  nodes.subscribe(n => nNodes = n.length);
+  nodes.subscribe(n => {
+    nNodes = n.length;
+    alertCount = n.filter(nd => nd.status !== 'online').length;
+  });
   links.subscribe(l => nLinks = l.length);
   packetCount.subscribe(p => nPackets = p);
   globalStatus.subscribe(s => currentStatus = s);
@@ -48,6 +52,10 @@
       <span class="value status-{currentStatus === 'SOS' ? 'danger' : currentStatus !== 'IDLE' ? 'active' : 'idle'}">
         {currentStatus}
       </span>
+    </div>
+    <div class="stat">
+      <span class="label">ALERTS</span>
+      <span class="value {alertCount > 0 ? 'status-danger' : 'status-idle'}">{alertCount}</span>
     </div>
   </div>
   
