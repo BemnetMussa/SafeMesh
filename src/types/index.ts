@@ -24,6 +24,10 @@ export interface MeshNode {
   battery: number;         // 0–100
   last_seen: number;       // unix ms
 
+  // Geographic coordinates (optional — populated in Map mode)
+  lat?: number;
+  lon?: number;
+
   // Animation state (canvas-only, not persisted to scenario)
   pulseR: number;
   pulseAlpha: number;

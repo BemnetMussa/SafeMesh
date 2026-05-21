@@ -1,11 +1,21 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
+  import { ZoomIn, ZoomOut, Maximize2, MapPin, Grid3x3 } from 'lucide-svelte';
+  import L from 'leaflet';
   import {
-    nodes, links, packets, sosWaves, failureFlashes, signalRadius,
-    addNode, triggerSOS, type Node,
+    nodes, links, packets, sosWaves, failureFlashes, signalRadius, mapMode,
+    addNode, triggerSOS, WEAK_LINK_THRESHOLD, type Node,
   } from '../lib/engine';
   import type { MeshLink } from '../types';
+
+  // ─── Map mode state ───────────────────────────────────────────────────────
+  let mapDiv: HTMLDivElement;
+  let leafletMap: L.Map | null = null;
+  let _mapActive = false;
+
+  const SATELLITE_URL  = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+  const SATELLITE_ATTR = 'Tiles &copy; Esri &mdash; Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community';
+  const LABELS_URL     = 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}';
 
   // ─── Canvas refs ──────────────────────────────────────────────────────────
   let canvas: HTMLCanvasElement;
@@ -36,6 +46,10 @@
     packets.subscribe(p        => currentPackets = p),
     sosWaves.subscribe(w       => currentWaves   = w),
     failureFlashes.subscribe(f => currentFlashes = f),
+    mapMode.subscribe(active  => {
+      _mapActive = active;
+      if (active) enterMapMode(); else exitMapMode();
+    }),
   ];
 
   // ─── Camera ───────────────────────────────────────────────────────────────
@@ -147,6 +161,132 @@
     };
   }
 
+  // ─── Map mode helpers ─────────────────────────────────────────────────────
+
+  // Returns screen position for a node: projected lat/lon in map mode, world coords in canvas mode
+  function nodeScreenPos(n: Node): { x: number; y: number } {
+    if (_mapActive && leafletMap && n.lat != null && n.lon != null) {
+      const pt = leafletMap.latLngToContainerPoint(L.latLng(n.lat, n.lon));
+      return { x: pt.x, y: pt.y };
+    }
+    return { x: n.x, y: n.y };
+  }
+
+  // Assign lat/lon to canvas-mode nodes using current Leaflet viewport
+  function assignLatLon() {
+    if (!leafletMap) return;
+    const lmap = leafletMap;
+    nodes.update(ns => ns.map(n => {
+      if (n.lat != null && n.lon != null) return n;
+      const sx     = n.x * camera.scale + camera.x;
+      const sy     = n.y * camera.scale + camera.y;
+      const latlng = lmap.containerPointToLatLng(L.point(sx, sy));
+      return { ...n, lat: latlng.lat, lon: latlng.lng };
+    }));
+  }
+
+  function setMapInteractivity(enabled: boolean) {
+    if (!leafletMap) return;
+    if (enabled) {
+      leafletMap.dragging.enable();
+      leafletMap.scrollWheelZoom.enable();
+      leafletMap.doubleClickZoom.enable();
+      leafletMap.touchZoom.enable();
+      leafletMap.boxZoom.enable();
+      leafletMap.keyboard.enable();
+      if ((leafletMap as any).tap) (leafletMap as any).tap.enable();
+    } else {
+      leafletMap.dragging.disable();
+      leafletMap.scrollWheelZoom.disable();
+      leafletMap.doubleClickZoom.disable();
+      leafletMap.touchZoom.disable();
+      leafletMap.boxZoom.disable();
+      leafletMap.keyboard.disable();
+      if ((leafletMap as any).tap) (leafletMap as any).tap.disable();
+    }
+  }
+
+  function forceMapLayout() {
+    requestAnimationFrame(() => {
+      leafletMap?.invalidateSize();
+      requestAnimationFrame(() => leafletMap?.invalidateSize());
+    });
+  }
+
+  async function enterMapMode() {
+    // Ensure mapDiv is bound (should be, since it's always in the DOM, but tick() makes it robust)
+    if (!mapDiv) await tick();
+    if (!mapDiv) return;
+
+    // Create the Leaflet map once (then reuse it on subsequent toggles)
+    if (!leafletMap) {
+      const seeded = currentNodes.find(n => n.lat != null && n.lon != null);
+      const center: [number, number] = seeded ? [seeded.lat!, seeded.lon!] : [51.505, -0.09];
+
+      leafletMap = L.map(mapDiv, {
+        center,
+        zoom: 14,
+        zoomControl: false,
+        preferCanvas: false,
+      });
+
+      L.tileLayer(SATELLITE_URL, { attribution: SATELLITE_ATTR, maxZoom: 19 }).addTo(leafletMap);
+      L.tileLayer(LABELS_URL,    { opacity: 0.7, maxZoom: 19 }).addTo(leafletMap);
+      L.control.zoom({ position: 'topleft' }).addTo(leafletMap);
+
+      leafletMap.on('click', (e: L.LeafletMouseEvent) => {
+        const lmap = leafletMap!;
+        const pt   = lmap.latLngToContainerPoint(e.latlng);
+        addNode(pt.x, pt.y, undefined, e.latlng.lat, e.latlng.lng);
+      });
+
+      leafletMap.on('contextmenu', (e: L.LeafletMouseEvent) => {
+        e.originalEvent.preventDefault();
+        const pt  = leafletMap!.latLngToContainerPoint(e.latlng);
+        const hit = nodeAtScreen(pt.x, pt.y, 28);
+        if (hit) {
+          const pos = nodeScreenPos(hit);
+          triggerSOS(hit, { x: pos.x, y: pos.y });
+        }
+      });
+    }
+
+    setMapInteractivity(true);
+    forceMapLayout();
+
+    // After layout settles, assign geo coords to any nodes that only have x/y
+    setTimeout(() => {
+      if (!leafletMap) return;
+      assignLatLon();
+      const geoNodes = currentNodes.filter(n => n.lat != null && n.lon != null);
+      if (geoNodes.length > 1) {
+        const avgLat = geoNodes.reduce((s, n) => s + n.lat!, 0) / geoNodes.length;
+        const avgLon = geoNodes.reduce((s, n) => s + n.lon!, 0) / geoNodes.length;
+        leafletMap.setView([avgLat, avgLon], leafletMap.getZoom());
+      }
+    }, 250);
+  }
+
+  function exitMapMode() {
+    if (!leafletMap) return;
+    const lmap = leafletMap;
+    nodes.update(ns => ns.map(n => {
+      if (n.lat == null || n.lon == null) return n;
+      const pt = lmap.latLngToContainerPoint(L.latLng(n.lat, n.lon));
+      return { ...n, x: (pt.x - camera.x) / camera.scale, y: (pt.y - camera.y) / camera.scale };
+    }));
+    setMapInteractivity(false);
+  }
+
+  // Screen-space hit test (used in map mode where canvas has pointer-events:none)
+  function nodeAtScreen(sx: number, sy: number, r = 20): Node | null {
+    for (let i = currentNodes.length - 1; i >= 0; i--) {
+      const pos = nodeScreenPos(currentNodes[i]);
+      if (Math.hypot(pos.x - sx, pos.y - sy) < r) return currentNodes[i];
+    }
+    return null;
+  }
+
   function zoomBy(factor: number) {
     if (!wrap) return;
     const cx = wrap.clientWidth  / 2;
@@ -221,34 +361,65 @@
     const h = wrap.clientHeight;
     ctx.clearRect(0, 0, w, h);
 
-    // Apply camera transform — all world-space drawing goes inside save/restore
-    ctx.save();
-    ctx.translate(camera.x, camera.y);
-    ctx.scale(camera.scale, camera.scale);
+    // In map mode: no camera transform — positions are projected to screen space each frame.
+    // In canvas mode: apply camera transform and use world-space positions.
+    let frameNodes: Node[];
+    let frameMap: Map<string, Node>;
+
+    if (_mapActive && leafletMap) {
+      const lmap = leafletMap;
+      frameNodes = currentNodes
+        .filter(n => n.lat != null && n.lon != null)
+        .map(n => {
+          const pt = lmap.latLngToContainerPoint(L.latLng(n.lat!, n.lon!));
+          return { ...n, x: pt.x, y: pt.y };
+        });
+      frameMap = new Map(frameNodes.map(n => [n.id, n]));
+    } else {
+      frameNodes = currentNodes;
+      frameMap   = nodeMap;
+      ctx.save();
+      ctx.translate(camera.x, camera.y);
+      ctx.scale(camera.scale, camera.scale);
+    }
 
     // 1. Links
     currentLinks.forEach(link => {
-      const a = nodeMap.get(link.source);
-      const b = nodeMap.get(link.target);
+      const a = frameMap.get(link.source);
+      const b = frameMap.get(link.target);
       if (!a || !b) return;
 
+      const isWeak    = link.quality < WEAK_LINK_THRESHOLD;
       const alpha     = 0.15 + link.quality * 0.45;
       const lineWidth = 0.8  + link.quality * 1.7;
 
-      const grad = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
-      grad.addColorStop(0, hexAlpha(nodeColor(a), alpha));
-      grad.addColorStop(1, hexAlpha(nodeColor(b), alpha));
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
-      ctx.strokeStyle = grad;
-      ctx.lineWidth   = lineWidth;
-      ctx.stroke();
+
+      if (isWeak) {
+        ctx.strokeStyle = `rgba(245,158,11,${0.25 + link.quality * 0.5})`;
+        ctx.lineWidth   = 1;
+        ctx.setLineDash([4, 6]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else {
+        const srcNode = frameMap.get(link.source);
+        const tgtNode = frameMap.get(link.target);
+        const grad = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+        grad.addColorStop(0, hexAlpha(nodeColor(srcNode ?? a), alpha));
+        grad.addColorStop(1, hexAlpha(nodeColor(tgtNode ?? b), alpha));
+        ctx.strokeStyle = grad;
+        ctx.lineWidth   = lineWidth;
+        ctx.stroke();
+      }
 
       const mx = (a.x + b.x) / 2;
       const my = (a.y + b.y) / 2;
       const d  = Math.round(Math.hypot(a.x - b.x, a.y - b.y));
-      ctx.fillStyle   = `rgba(255,255,255,${0.12 + link.quality * 0.18})`;
+      ctx.fillStyle   = isWeak
+        ? `rgba(245,158,11,0.5)`
+        : `rgba(255,255,255,${0.12 + link.quality * 0.18})`;
       ctx.font        = '10px "JetBrains Mono", monospace';
       ctx.textAlign   = 'center';
       ctx.fillText(`${d}m`, mx, my - 4);
@@ -295,17 +466,18 @@
     });
 
     // 4. Nodes
-    currentNodes.forEach(n => {
+    frameNodes.forEach(n => {
       const nColor    = nodeColor(n);
       const alpha     = nodeAlpha(n);
-      const isHovered = hoverNode?.id === n.id;
+      const isHovered = !_mapActive && hoverNode?.id === n.id;
+      const { x: nx, y: ny } = n; // in map mode these are screen coords; in canvas mode world coords
 
       ctx.globalAlpha = alpha;
 
       // Pulse ring
       if (n.pulseAlpha > 0.01) {
         ctx.beginPath();
-        ctx.arc(n.x, n.y, n.pulseR, 0, Math.PI * 2);
+        ctx.arc(nx, ny, n.pulseR, 0, Math.PI * 2);
         ctx.strokeStyle = hexAlpha(nColor, n.pulseAlpha);
         ctx.lineWidth   = 2;
         ctx.stroke();
@@ -313,36 +485,37 @@
         n.pulseAlpha *= 0.92;
       }
 
-      // Signal radius fill
-      const radGrad = ctx.createRadialGradient(n.x, n.y, sRadius * 0.1, n.x, n.y, sRadius);
-      radGrad.addColorStop(0, hexAlpha(nColor, isHovered ? 0.12 : 0.05));
-      radGrad.addColorStop(1, 'transparent');
-      ctx.beginPath();
-      ctx.arc(n.x, n.y, sRadius, 0, Math.PI * 2);
-      ctx.fillStyle = radGrad;
-      ctx.fill();
-
-      // Hover dashed ring
-      if (isHovered) {
+      // Signal radius fill — only in canvas mode (meaningless geographically in map mode)
+      if (!_mapActive) {
+        const radGrad = ctx.createRadialGradient(nx, ny, sRadius * 0.1, nx, ny, sRadius);
+        radGrad.addColorStop(0, hexAlpha(nColor, isHovered ? 0.12 : 0.05));
+        radGrad.addColorStop(1, 'transparent');
         ctx.beginPath();
-        ctx.arc(n.x, n.y, sRadius, 0, Math.PI * 2);
-        ctx.strokeStyle = hexAlpha(nColor, 0.2);
-        ctx.lineWidth   = 1;
-        ctx.setLineDash([4, 6]);
-        ctx.stroke();
-        ctx.setLineDash([]);
+        ctx.arc(nx, ny, sRadius, 0, Math.PI * 2);
+        ctx.fillStyle = radGrad;
+        ctx.fill();
+
+        if (isHovered) {
+          ctx.beginPath();
+          ctx.arc(nx, ny, sRadius, 0, Math.PI * 2);
+          ctx.strokeStyle = hexAlpha(nColor, 0.2);
+          ctx.lineWidth   = 1;
+          ctx.setLineDash([4, 6]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
       }
 
       // Outer glow disc
       ctx.beginPath();
-      ctx.arc(n.x, n.y, 14, 0, Math.PI * 2);
-      ctx.fillStyle = hexAlpha(nColor, 0.15);
+      ctx.arc(nx, ny, 14, 0, Math.PI * 2);
+      ctx.fillStyle = hexAlpha(nColor, _mapActive ? 0.25 : 0.15);
       ctx.fill();
 
       // Core circle
       ctx.beginPath();
-      ctx.arc(n.x, n.y, 8, 0, Math.PI * 2);
-      ctx.fillStyle   = '#0f111a';
+      ctx.arc(nx, ny, 8, 0, Math.PI * 2);
+      ctx.fillStyle   = _mapActive ? 'rgba(10,12,20,0.85)' : '#0f111a';
       ctx.fill();
       ctx.strokeStyle = nColor;
       ctx.lineWidth   = 2.5;
@@ -352,25 +525,51 @@
       if (n.status === 'offline') {
         ctx.strokeStyle = '#64748b';
         ctx.lineWidth   = 1.5;
-        ctx.beginPath(); ctx.moveTo(n.x - 4, n.y - 4); ctx.lineTo(n.x + 4, n.y + 4); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(n.x + 4, n.y - 4); ctx.lineTo(n.x - 4, n.y + 4); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(nx - 4, ny - 4); ctx.lineTo(nx + 4, ny + 4); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(nx + 4, ny - 4); ctx.lineTo(nx - 4, ny + 4); ctx.stroke();
       }
 
       // Warning badge
       if (n.status === 'warning') {
         ctx.beginPath();
-        ctx.arc(n.x + 6, n.y - 6, 3, 0, Math.PI * 2);
+        ctx.arc(nx + 6, ny - 6, 3, 0, Math.PI * 2);
         ctx.fillStyle   = '#f59e0b';
         ctx.globalAlpha = 1;
         ctx.fill();
       }
 
+      // Node-type indicator
+      ctx.globalAlpha = alpha;
+      if (n.type === 'gateway') {
+        ctx.beginPath();
+        ctx.arc(nx, ny, 13, 0, Math.PI * 2);
+        ctx.strokeStyle = hexAlpha(nColor, 0.45);
+        ctx.lineWidth   = 1;
+        ctx.setLineDash([2, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else if (n.type === 'relay') {
+        const s = 3.5;
+        ctx.beginPath();
+        ctx.moveTo(nx, ny - s - 1);
+        ctx.lineTo(nx - s, ny + s - 1);
+        ctx.lineTo(nx + s, ny + s - 1);
+        ctx.closePath();
+        ctx.fillStyle = hexAlpha(nColor, 0.85);
+        ctx.fill();
+      } else if (n.type === 'sensor') {
+        ctx.beginPath();
+        ctx.arc(nx, ny, 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = hexAlpha(nColor, 0.9);
+        ctx.fill();
+      }
+
       // Label
       ctx.globalAlpha = alpha;
-      ctx.fillStyle   = varColor('--text-main');
+      ctx.fillStyle   = _mapActive ? 'rgba(255,255,255,0.95)' : varColor('--text-main');
       ctx.font        = '500 11px "Inter", sans-serif';
       ctx.textAlign   = 'center';
-      ctx.fillText(n.label, n.x, n.y + 26);
+      ctx.fillText(n.label, nx, ny + 26);
 
       ctx.globalAlpha = 1;
     });
@@ -400,26 +599,33 @@
       f.alpha *= 0.88;
     });
 
-    ctx.restore(); // end camera transform
+    if (!_mapActive) ctx.restore(); // end camera transform (canvas mode only)
 
     // Empty state (screen-space)
     if (currentNodes.length === 0) {
       ctx.textAlign   = 'center';
-      ctx.fillStyle   = 'rgba(255,255,255,0.07)';
+      ctx.fillStyle   = _mapActive ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.07)';
       ctx.font        = '500 15px "Inter", sans-serif';
-      ctx.fillText('Click anywhere on the canvas to place a node', w / 2, h / 2 - 10);
-      ctx.fillStyle   = 'rgba(255,255,255,0.03)';
+      ctx.fillText(
+        _mapActive ? 'Click the map to place a node' : 'Click anywhere on the canvas to place a node',
+        w / 2, h / 2 - 10,
+      );
+      ctx.fillStyle   = _mapActive ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.03)';
       ctx.font        = '400 11px "Inter", sans-serif';
-      ctx.fillText('or load a scenario from the controls panel', w / 2, h / 2 + 14);
+      ctx.fillText(
+        _mapActive ? 'Right-click a node for emergency SOS' : 'or load a scenario from the controls panel',
+        w / 2, h / 2 + 14,
+      );
     }
 
-    renderMinimap();
+    if (!_mapActive) renderMinimap();
 
     rfId = requestAnimationFrame(render);
   }
 
   // ─── Hit test ─────────────────────────────────────────────────────────────
   function nodeAt(sx: number, sy: number, r = 20): Node | null {
+    if (_mapActive) return nodeAtScreen(sx, sy, r);
     const { x, y } = toWorld(sx, sy);
     const hitR     = r / camera.scale;
     for (let i = currentNodes.length - 1; i >= 0; i--) {
@@ -508,6 +714,7 @@
 
   function handleContextMenu(e: MouseEvent) {
     e.preventDefault();
+    if (_mapActive) return; // handled by Leaflet contextmenu
     const rect = canvas.getBoundingClientRect();
     const hit  = nodeAt(e.clientX - rect.left, e.clientY - rect.top);
     if (hit) triggerSOS(hit);
@@ -550,16 +757,25 @@
     canvas.removeEventListener('wheel',   handleWheel);
     cancelAnimationFrame(rfId);
     unsubs.forEach(u => u());
+    if (leafletMap) { leafletMap.remove(); leafletMap = null; }
   });
 </script>
 
 <div class="canvas-wrap" bind:this={wrap}>
-  <!-- Static background grid -->
-  <canvas bind:this={bgCanvas} class="bg-canvas"></canvas>
+  <!-- Leaflet satellite map background (always present; toggled by opacity/pointer-events) -->
+  <div bind:this={mapDiv} class="map-layer" class:map-layer-hidden={!_mapActive}></div>
 
-  <!-- Main interactive canvas -->
+  {#if _mapActive && !leafletMap}
+    <div class="map-loading">Loading map…</div>
+  {/if}
+
+  <!-- Static background grid (canvas mode only) -->
+  <canvas bind:this={bgCanvas} class="bg-canvas" class:hidden={_mapActive}></canvas>
+
+  <!-- Main interactive canvas — pointer-events:none in map mode (Leaflet handles clicks) -->
   <canvas
     bind:this={canvas}
+    class:canvas-map-overlay={_mapActive}
     on:mousedown={handleMouseDown}
     on:mousemove={handleMouseMove}
     on:mouseup={handleMouseUp}
@@ -567,36 +783,62 @@
     on:contextmenu={handleContextMenu}
   ></canvas>
 
-  <!-- Minimap -->
+  <!-- Minimap (canvas mode only) -->
   <canvas
     bind:this={minimapCanvas}
     width={MM_W}
     height={MM_H}
     class="minimap"
-    class:minimap-hidden={currentNodes.length === 0}
+    class:minimap-hidden={currentNodes.length === 0 || _mapActive}
   ></canvas>
 
-  <!-- Zoom controls -->
-  <div class="zoom-controls glass-panel">
-    <button class="zoom-btn" on:click={() => zoomBy(1.25)} title="Zoom in">
-      <ZoomIn size={13} />
+  <!-- Zoom / view controls (canvas mode only) -->
+  {#if !_mapActive}
+    <div class="zoom-controls glass-panel">
+      <button class="zoom-btn" on:click={() => zoomBy(1.25)} title="Zoom in">
+        <ZoomIn size={13} />
+      </button>
+      <span class="zoom-level">{zoomPct}%</span>
+      <button class="zoom-btn" on:click={() => zoomBy(0.8)} title="Zoom out">
+        <ZoomOut size={13} />
+      </button>
+      <div class="zoom-sep"></div>
+      <button class="zoom-btn" on:click={fitToScreen} title="Fit to screen">
+        <Maximize2 size={13} />
+      </button>
+    </div>
+  {/if}
+
+  <!-- Mode toggle — always visible -->
+  <div class="mode-toggle glass-panel" class:mode-toggle-map={_mapActive}>
+    <button
+      class="mode-btn"
+      class:mode-btn-active={!_mapActive}
+      on:click={() => mapMode.set(false)}
+      title="Canvas mode"
+    >
+      <Grid3x3 size={13} /> Canvas
     </button>
-    <span class="zoom-level">{zoomPct}%</span>
-    <button class="zoom-btn" on:click={() => zoomBy(0.8)} title="Zoom out">
-      <ZoomOut size={13} />
-    </button>
-    <div class="zoom-sep"></div>
-    <button class="zoom-btn" on:click={fitToScreen} title="Fit to screen">
-      <Maximize2 size={13} />
+    <button
+      class="mode-btn"
+      class:mode-btn-active={_mapActive}
+      on:click={() => mapMode.set(true)}
+      title="Satellite map mode"
+    >
+      <MapPin size={13} /> Map
     </button>
   </div>
 
-  <!-- World-space cursor coords -->
-  <div class="coords">{worldCursor.x} : {worldCursor.y}</div>
+  <!-- World-space cursor coords (canvas mode only) -->
+  {#if !_mapActive}
+    <div class="coords">{worldCursor.x} : {worldCursor.y}</div>
+  {/if}
 
   <!-- Context hint -->
-  <div class="hint" class:hint-pan={spaceDown}>
-    {#if spaceDown}
+  <div class="hint" class:hint-pan={spaceDown && !_mapActive}>
+    {#if _mapActive}
+      Click to place node · Right-click node for SOS · Scroll to zoom
+    {:else if spaceDown}
       Pan mode — release Space to exit
     {:else}
       Click · Drag · Scroll to Zoom · Space+Drag to Pan · Right-Click SOS
@@ -622,10 +864,73 @@
     pointer-events: none;
     z-index: 1;
   }
+  .bg-canvas.hidden { display: none; }
 
   canvas:not(.bg-canvas):not(.minimap) {
     z-index: 2;
     cursor: crosshair;
+  }
+
+  /* In map mode the canvas is a transparent overlay — Leaflet handles all clicks */
+  .canvas-map-overlay {
+    pointer-events: none !important;
+    background: transparent !important;
+  }
+
+  /* ── Leaflet map layer ── */
+  .map-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+  }
+  .map-layer-hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .map-loading {
+    position: absolute;
+    left: 24px;
+    bottom: 18px;
+    z-index: 30;
+    padding: 8px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    color: rgba(255,255,255,0.85);
+    background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(255,255,255,0.08);
+    pointer-events: none;
+  }
+  /* Override Leaflet's default z-indices so our canvas stays on top */
+  :global(.leaflet-pane)       { z-index: 1 !important; }
+  :global(.leaflet-top),
+  :global(.leaflet-bottom)     { z-index: 5 !important; }
+
+  /* ── Mode toggle ── */
+  .mode-toggle {
+    position: absolute;
+    top: 24px;
+    right: 24px;
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 8px;
+    z-index: 20;
+    pointer-events: auto;
+  }
+  .mode-toggle-map { right: 80px; } /* shift right in map mode to avoid Leaflet zoom control overlap */
+
+  .mode-btn {
+    display: flex; align-items: center; gap: 5px;
+    background: transparent; border: none;
+    color: var(--text-dim); cursor: pointer;
+    padding: 5px 10px; border-radius: 5px;
+    font-size: 11px; font-weight: 500;
+    transition: all 0.15s;
+  }
+  .mode-btn:hover { background: rgba(255,255,255,0.07); color: var(--text-main); }
+  .mode-btn-active {
+    background: rgba(14,165,233,0.12);
+    color: var(--accent-primary);
   }
 
   /* ── Minimap ── */

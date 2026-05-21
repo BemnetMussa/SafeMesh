@@ -1,6 +1,6 @@
 import { get } from 'svelte/store';
 import {
-  nodes, animSpeed, simulationConfig,
+  nodes, animSpeed, simulationConfig, emitEvent,
   updateNodeStatus, updateNodeBattery, addLog,
 } from './engine';
 
@@ -13,7 +13,42 @@ function _intervalMs(): number {
 }
 
 function _doTick(): void {
+  const cfg      = get(simulationConfig);
+  const oldNodes = get(nodes);
+
   simulationConfig.update(c => ({ ...c, tick: c.tick + 1 }));
+
+  // Passive battery drain: 0.05 % × speed per tick
+  const drain = 0.05 * cfg.speed;
+
+  const updated = oldNodes.map(n => {
+    if (n.status === 'offline') return n;
+
+    const battery  = +Math.max(0, n.battery - drain).toFixed(2);
+    // Small random signal jitter (±2), clamped to [20, 100]
+    const signal   = +Math.max(20, Math.min(100, n.signal_strength + (Math.random() * 4 - 2))).toFixed(1);
+
+    let status = n.status;
+    if      (battery === 0)                               status = 'offline';
+    else if (battery <= 25 && n.status === 'online')      status = 'warning';
+
+    return { ...n, battery, signal_strength: signal, status };
+  });
+
+  nodes.set(updated);
+
+  // Fire threshold-crossing events (only on first crossing)
+  updated.forEach((n, i) => {
+    const o = oldNodes[i];
+    if (n.battery <= 25 && o.battery > 25) {
+      addLog(`⚠ Low battery on ${n.label}: ${Math.round(n.battery)}%`, 'sys');
+      emitEvent('battery_low', n.id, { payload: { battery: n.battery }, severity: 'warning' });
+    }
+    if (n.status === 'offline' && o.status !== 'offline') {
+      addLog(`💀 ${n.label} went offline — battery depleted`, 'sys');
+      emitEvent('node_update', n.id, { payload: { status: 'offline', reason: 'battery' }, severity: 'critical' });
+    }
+  });
 }
 
 function _startTimer(): void {
