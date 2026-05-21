@@ -9,6 +9,7 @@
     removeNode, sendPacketAlongPath, floodBroadcast, findPath, addLog,
     flashFail, recordFailedMessage,
     loadPreset, downloadScenario, copyScenarioToClipboard, importScenario,
+    canvasSignalRadius, mapSignalRadius, mapMode,
     type Node, type PresetName,
   } from '../lib/engine';
   import type { LogEntry } from '../lib/engine';
@@ -25,6 +26,10 @@
   let messageList: MeshMessage[] = [];
   let rVal    = 150;
   let simCfg: SimulationConfig   = { speed: 1, status: 'idle', tick: 0, seed: 0 };
+  let rangeMin = 60;
+  let rangeMax = 360;
+  let rangeUnit = 'px';
+  let rangeLabel = 'Signal Range';
 
   nodes.subscribe(n          => nList        = n);
   logs.subscribe(l           => logList      = l);
@@ -32,6 +37,19 @@
   messages.subscribe(ms      => messageList  = [...ms].reverse());
   signalRadius.subscribe(r   => rVal         = r);
   simulationConfig.subscribe(c => simCfg     = c);
+  mapMode.subscribe(active => {
+    if (active) {
+      rangeMin = 500;
+      rangeMax = 10000;
+      rangeUnit = 'm';
+      rangeLabel = 'Mesh Range';
+    } else {
+      rangeMin = 60;
+      rangeMax = 360;
+      rangeUnit = 'px';
+      rangeLabel = 'Signal Range';
+    }
+  });
 
   // ─── Transmit ───────────────────────────────────────────────────────────
   let fromNode = '';
@@ -39,7 +57,12 @@
   let message  = '';
 
   function handleRadiusChange(e: Event) {
-    signalRadius.set(parseInt((e.target as HTMLInputElement).value));
+    const value = parseInt((e.target as HTMLInputElement).value);
+    if ($mapMode) {
+      mapSignalRadius.set(value);
+    } else {
+      canvasSignalRadius.set(value);
+    }
   }
 
   function handleSpeedChange(e: Event) {
@@ -248,9 +271,9 @@
       <div class="section-title"><SlidersHorizontal size={14} /> Link Tuning</div>
       <div class="slider-group">
         <div class="slider-label">
-          <span>Signal Range</span><span class="val">{rVal}m</span>
+          <span>{rangeLabel}</span><span class="val">{rVal}{rangeUnit}</span>
         </div>
-        <input type="range" min="60" max="360" value={rVal} on:input={handleRadiusChange} />
+        <input type="range" min={rangeMin} max={rangeMax} value={rVal} on:input={handleRadiusChange} />
       </div>
     </section>
 
@@ -493,15 +516,15 @@
   }
 
   .controls-panel {
-    top: 24px; right: 24px;
-    width: 300px;
-    max-height: calc(100% - 48px);
+    top: 24px; left: 24px;
+    width: 320px;
+    max-height: calc(100% - 320px);
     overflow-y: auto;
   }
 
   .logs-panel {
     bottom: 24px; left: 24px;
-    width: 380px;
+    width: 320px;
     height: 270px;
   }
 

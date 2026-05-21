@@ -1,6 +1,6 @@
 <script lang="ts">
   import { X, Wifi, Zap, MapPin, Plus, Trash2 } from 'lucide-svelte';
-  import { nodes, links, selectedNodeId, updateNodeType } from '../lib/engine';
+  import { nodes, links, selectedNodeId, updateNodeType, mapMode, signalRadius } from '../lib/engine';
   import type { NodeType } from '../types';
 
   // ─── Metadata editing ──────────────────────────────────────────────────────
@@ -62,6 +62,12 @@
     if (pct <= 50) return 'bar-warn';
     return 'bar-bat-ok';
   }
+
+  $: geoLocation = selectedNode?.lat != null && selectedNode?.lon != null
+    ? `${selectedNode.lat.toFixed(5)}, ${selectedNode.lon.toFixed(5)}`
+    : 'Not assigned yet';
+
+  $: activeRange = `${Math.round($signalRadius)}${$mapMode ? ' m' : ' px'}`;
 </script>
 
 {#if selectedNode}
@@ -136,6 +142,14 @@
         <span class="insp-label"><MapPin size={11} />Position</span>
         <span class="insp-val mono">({Math.round(selectedNode.x)}, {Math.round(selectedNode.y)})</span>
       </div>
+      <div class="insp-row">
+        <span class="insp-label">Geo location</span>
+        <span class="insp-val mono">{geoLocation}</span>
+      </div>
+      <div class="insp-row">
+        <span class="insp-label">Active range</span>
+        <span class="insp-val mono">{activeRange}</span>
+      </div>
     </div>
 
     <!-- Neighbors -->
@@ -209,15 +223,15 @@
 <style>
   .inspector-wrap {
     position: absolute;
-    top: 80px;
-    left: 24px;
+    top: 24px;
+    right: 24px;
     z-index: 50;
     pointer-events: auto;
     animation: slideIn 0.18s ease;
   }
 
   @keyframes slideIn {
-    from { opacity: 0; transform: translateX(-8px); }
+    from { opacity: 0; transform: translateX(8px); }
     to   { opacity: 1; transform: translateX(0); }
   }
 

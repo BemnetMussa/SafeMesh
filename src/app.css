@@ -1,18 +1,22 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
 :root {
-  --bg-color: #050608;
-  --panel-bg: rgba(13, 16, 23, 0.55);
-  --panel-border: rgba(255, 255, 255, 0.08);
+  /* Minimal, dark base */
+  --bg-color: #030406;
+  --panel-bg: rgba(8, 10, 14, 0.88);
+  --panel-border: rgba(255, 255, 255, 0.12);
 
+  /* Semantic Colors for Status */
+  --accent-success: #10b981; /* Emerald */
+  --accent-warning: #f59e0b; /* Amber */
+  --accent-offline: #475569; /* Slate */
+  --accent-danger: #ef4444;  /* Red */
   --accent-primary: #0ea5e9;
-  --accent-success: #10b981;
-  --accent-warning: #f59e0b;
-  --accent-danger: #f43f5e;
-  
+
+  /* Text */
   --text-main: #f8fafc;
-  --text-muted: #94a3b8;
-  --text-dim: #475569;
+  --text-muted: #cbd5e1;
+  --text-dim: #94a3b8;
 
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
@@ -24,6 +28,15 @@
   padding: 0;
 }
 
+html,
+body {
+  width: 100%;
+}
+
+html {
+  height: 100%;
+}
+
 body {
   background-color: var(--bg-color);
   background-image: 
@@ -32,18 +45,58 @@ body {
   color: var(--text-main);
   font-family: var(--font-sans);
   height: 100vh;
-  width: 100vw;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   -webkit-font-smoothing: antialiased;
 }
 
+/* Landing page: allow normal document scroll */
+html.route-landing,
+body.route-landing {
+  height: auto;
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+body.route-landing #app {
+  flex: none;
+  min-height: 100vh;
+}
+
 .glass-panel {
   background: var(--panel-bg);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--panel-border);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.32);
+}
+
+/* Animations */
+@keyframes pulse-warning {
+  0% { opacity: 0.8; transform: scale(0.95); }
+  50% { opacity: 1; transform: scale(1.05); }
+  100% { opacity: 0.8; transform: scale(0.95); }
+}
+
+@keyframes radar-ping {
+  0% { transform: scale(0.5); opacity: 0.8; }
+  100% { transform: scale(2.5); opacity: 0; }
+}
+
+@keyframes dash-flow {
+  to {
+    stroke-dashoffset: -20;
+  }
 }
 
 ::-webkit-scrollbar {

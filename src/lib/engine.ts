@@ -37,10 +37,13 @@ export const WEAK_LINK_THRESHOLD = 0.3;  // links below this quality trigger an 
 
 // ─── Core stores ─────────────────────────────────────────────────────────────
 
-export const signalRadius   = writable(150);
-export const animSpeed      = writable(6);
-export const selectedNodeId = writable<string | null>(null);
-export const mapMode        = writable(false);
+export const canvasSignalRadius = writable(150);
+export const mapSignalRadius    = writable(2500);
+export const signalRadius       = writable(150);
+export const animSpeed          = writable(6);
+export const selectedNodeId     = writable<string | null>(null);
+export const mapMode            = writable(false);
+export const currentView        = writable<'topology' | 'dashboard'>('topology');
 
 export const nodes          = writable<MeshNode[]>([]);
 export const links          = writable<MeshLink[]>([]);
@@ -63,6 +66,10 @@ export const simulationConfig = writable<SimulationConfig>({
   seed: Date.now(),
 });
 
+function syncSignalRadius(): void {
+  signalRadius.set(get(mapMode) ? get(mapSignalRadius) : get(canvasSignalRadius));
+}
+
 // ─── ID counters ─────────────────────────────────────────────────────────────
 
 let logIdCounter    = 0;
@@ -73,6 +80,19 @@ let nodeIdCounter   = 0;
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 export function dist(a: MeshNode, b: MeshNode): number {
+  if (get(mapMode) && a.lat != null && a.lon != null && b.lat != null && b.lon != null) {
+    const R = 6371e3; // Earth radius in meters
+    const phi1 = a.lat * Math.PI/180;
+    const phi2 = b.lat * Math.PI/180;
+    const deltaPhi = (b.lat - a.lat) * Math.PI/180;
+    const deltaLambda = (b.lon - a.lon) * Math.PI/180;
+
+    const val = Math.sin(deltaPhi/2) * Math.sin(deltaPhi/2) +
+              Math.cos(phi1) * Math.cos(phi2) *
+              Math.sin(deltaLambda/2) * Math.sin(deltaLambda/2);
+    const c = 2 * Math.atan2(Math.sqrt(val), Math.sqrt(1-val));
+    return R * c;
+  }
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
@@ -146,6 +166,13 @@ export function updateLinks(): void {
 
 nodes.subscribe(() => updateLinks());
 signalRadius.subscribe(() => updateLinks());
+canvasSignalRadius.subscribe(() => {
+  if (!get(mapMode)) syncSignalRadius();
+});
+mapSignalRadius.subscribe(() => {
+  if (get(mapMode)) syncSignalRadius();
+});
+mapMode.subscribe(() => syncSignalRadius());
 // NOTE: links.subscribe wired below, after _knownWeakLinks and _lastComponentCount are declared.
 
 export function getNeighbors(node: MeshNode): MeshNode[] {
@@ -608,12 +635,16 @@ export function triggerSOS(
   if (!src) return;
 
   const wavePos = overridePos ?? { x: src.x, y: src.y };
+  const mapActive = get(mapMode);
 
   for (let i = 0; i < 4; i++) {
     setTimeout(() => {
+      const waveBase = mapActive && src.lat != null && src.lon != null
+        ? { lat: src.lat, lon: src.lon }
+        : { x: wavePos.x, y: wavePos.y };
       sosWaves.update(sw => [
         ...sw,
-        { x: wavePos.x, y: wavePos.y, r: 0, alpha: 0.8, maxR: get(signalRadius) * 3.5 },
+        { ...waveBase, r: 0, alpha: 0.8, maxR: get(signalRadius) * 3.5 },
       ]);
     }, i * 300);
   }

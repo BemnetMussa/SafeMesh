@@ -13,9 +13,15 @@
   let leafletMap: L.Map | null = null;
   let _mapActive = false;
 
-  const SATELLITE_URL  = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-  const SATELLITE_ATTR = 'Tiles &copy; Esri &mdash; Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community';
-  const LABELS_URL     = 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}';
+  const STREET_MAP_URL  = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+  const STREET_MAP_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
+
+  // ─── User location markers ───────────────────────────────────────────────
+  let userMarker: L.Marker | null = null;
+  let accuracyCircle: L.Circle | null = null;
+  let userLocation: { lat: number; lon: number; accuracy: number } | null = null;
+  let mapCenterInfo = { lat: 0, lon: 0, zoom: 14 };
+  let locationStatus = 'Location not requested';
 
   // ─── Canvas refs ──────────────────────────────────────────────────────────
   let canvas: HTMLCanvasElement;
@@ -93,6 +99,54 @@
     return n.status === 'offline' ? 0.45 : 1;
   }
 
+  function geoLabel(n: Node): string | null {
+    if (n.lat == null || n.lon == null) return null;
+    return `${n.lat.toFixed(4)}, ${n.lon.toFixed(4)}`;
+  }
+  function buildGeoLayout(nodesForLayout: Node[]): Map<string, { x: number; y: number }> {
+    const geoNodes = nodesForLayout.filter(n => n.lat != null && n.lon != null);
+    if (geoNodes.length === 0) return new Map();
+
+    const refLat = geoNodes.reduce((sum, n) => sum + n.lat!, 0) / geoNodes.length;
+    const refLon = geoNodes.reduce((sum, n) => sum + n.lon!, 0) / geoNodes.length;
+    const metersPerDegLat = 111_320;
+    const metersPerDegLon = Math.max(1, 111_320 * Math.cos(refLat * Math.PI / 180));
+
+    const geoPoints = geoNodes.map(n => ({
+      id: n.id,
+      x: (n.lon! - refLon) * metersPerDegLon,
+      y: -(n.lat! - refLat) * metersPerDegLat,
+    }));
+
+    const minX = Math.min(...geoPoints.map(p => p.x));
+    const maxX = Math.max(...geoPoints.map(p => p.x));
+    const minY = Math.min(...geoPoints.map(p => p.y));
+    const maxY = Math.max(...geoPoints.map(p => p.y));
+    const layoutWidth = Math.max(1, maxX - minX);
+    const layoutHeight = Math.max(1, maxY - minY);
+    const availableWidth = Math.max(220, wrap?.clientWidth ? wrap.clientWidth - 480 : 900);
+    const availableHeight = Math.max(220, wrap?.clientHeight ? wrap.clientHeight - 240 : 600);
+    const scale = Math.max(0.22, Math.min(1.2, Math.min(availableWidth / layoutWidth, availableHeight / layoutHeight) * 0.85));
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+
+    const layout = new Map<string, { x: number; y: number }>();
+    geoPoints.forEach(point => {
+      layout.set(point.id, {
+        x: (point.x - centerX) * scale,
+        y: (point.y - centerY) * scale,
+      });
+    });
+
+    return layout;
+  }
+
+  function getTopologyNodePos(node: Node, geoLayout: Map<string, { x: number; y: number }>): { x: number; y: number } {
+    const geoPos = geoLayout.get(node.id);
+    if (geoPos) return geoPos;
+    return { x: node.x, y: node.y };
+  }
+
   // ─── Helpers ──────────────────────────────────────────────────────────────
   function hexAlpha(hex: string, alpha: number) {
     const r = parseInt(hex.slice(1, 3), 16) || 0;
@@ -149,10 +203,12 @@
     const w = wrap.clientWidth;
     const h = wrap.clientHeight;
     const pad = 100;
-    const minX = Math.min(...currentNodes.map(n => n.x));
-    const maxX = Math.max(...currentNodes.map(n => n.x));
-    const minY = Math.min(...currentNodes.map(n => n.y));
-    const maxY = Math.max(...currentNodes.map(n => n.y));
+    const geoLayout = buildGeoLayout(currentNodes);
+    const positions = currentNodes.map(n => getTopologyNodePos(n, geoLayout));
+    const minX = Math.min(...positions.map(p => p.x));
+    const maxX = Math.max(...positions.map(p => p.x));
+    const minY = Math.min(...positions.map(p => p.y));
+    const maxY = Math.max(...positions.map(p => p.y));
     const scale = Math.min(w / (maxX - minX + pad * 2), h / (maxY - minY + pad * 2), 2);
     camera = {
       x: (w - (maxX + minX) * scale) / 2,
@@ -213,6 +269,62 @@
     });
   }
 
+  function updateMapReadout(): void {
+    if (!leafletMap) return;
+    const center = leafletMap.getCenter();
+    mapCenterInfo = {
+      lat: center.lat,
+      lon: center.lng,
+      zoom: leafletMap.getZoom(),
+    };
+  }
+
+  function requestUserLocation() {
+    if (!navigator.geolocation || !leafletMap) return;
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        if (!leafletMap) return;
+
+        const { latitude, longitude, accuracy } = position.coords;
+        userLocation = { lat: latitude, lon: longitude, accuracy };
+        locationStatus = `You are here ±${Math.round(accuracy)}m`;
+
+        if (userMarker) leafletMap.removeLayer(userMarker);
+        if (accuracyCircle) leafletMap.removeLayer(accuracyCircle);
+
+        accuracyCircle = L.circle([latitude, longitude], {
+          radius: accuracy,
+          color: '#0284c7',
+          fillColor: '#0284c7',
+          fillOpacity: 0.08,
+          weight: 1,
+          opacity: 0.3,
+          dashArray: '5, 5',
+        }).addTo(leafletMap);
+
+        const customIcon = L.divIcon({
+          html: `<div style="width: 16px; height: 16px; background: radial-gradient(circle, #06b6d4, #0284c7); border: 3px solid #fff; border-radius: 50%; box-shadow: 0 0 12px rgba(2, 132, 199, 0.6);"></div>`,
+          iconSize: [22, 22],
+          iconAnchor: [11, 11],
+          popupAnchor: [0, 0],
+        });
+
+        userMarker = L.marker([latitude, longitude], { icon: customIcon })
+          .bindPopup(`📍 My Location<br><small>Lat: ${latitude.toFixed(4)}<br>Lon: ${longitude.toFixed(4)}</small>`)
+          .addTo(leafletMap);
+
+        leafletMap.setView([latitude, longitude], Math.max(leafletMap.getZoom(), 15));
+        updateMapReadout();
+      },
+      (error) => {
+        locationStatus = 'Location unavailable - using map center';
+        console.warn('Geolocation error:', error);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 },
+    );
+  }
+
   async function enterMapMode() {
     // Ensure mapDiv is bound (should be, since it's always in the DOM, but tick() makes it robust)
     if (!mapDiv) await tick();
@@ -230,9 +342,11 @@
         preferCanvas: false,
       });
 
-      L.tileLayer(SATELLITE_URL, { attribution: SATELLITE_ATTR, maxZoom: 19 }).addTo(leafletMap);
-      L.tileLayer(LABELS_URL,    { opacity: 0.7, maxZoom: 19 }).addTo(leafletMap);
+      L.tileLayer(STREET_MAP_URL, { attribution: STREET_MAP_ATTR, maxZoom: 19 }).addTo(leafletMap);
       L.control.zoom({ position: 'topleft' }).addTo(leafletMap);
+
+      leafletMap.on('moveend zoomend', updateMapReadout);
+      updateMapReadout();
 
       leafletMap.on('click', (e: L.LeafletMouseEvent) => {
         const lmap = leafletMap!;
@@ -253,6 +367,7 @@
 
     setMapInteractivity(true);
     forceMapLayout();
+    requestUserLocation();
 
     // After layout settles, assign geo coords to any nodes that only have x/y
     setTimeout(() => {
@@ -263,18 +378,15 @@
         const avgLat = geoNodes.reduce((s, n) => s + n.lat!, 0) / geoNodes.length;
         const avgLon = geoNodes.reduce((s, n) => s + n.lon!, 0) / geoNodes.length;
         leafletMap.setView([avgLat, avgLon], leafletMap.getZoom());
+      } else if (userLocation) {
+        leafletMap.setView([userLocation.lat, userLocation.lon], 14);
       }
+      updateMapReadout();
     }, 250);
   }
 
   function exitMapMode() {
     if (!leafletMap) return;
-    const lmap = leafletMap;
-    nodes.update(ns => ns.map(n => {
-      if (n.lat == null || n.lon == null) return n;
-      const pt = lmap.latLngToContainerPoint(L.latLng(n.lat, n.lon));
-      return { ...n, x: (pt.x - camera.x) / camera.scale, y: (pt.y - camera.y) / camera.scale };
-    }));
     setMapInteractivity(false);
   }
 
@@ -366,6 +478,15 @@
     let frameNodes: Node[];
     let frameMap: Map<string, Node>;
 
+    let activeNeighbors = new Set<string>();
+    if (hoverNode && !_mapActive) {
+      activeNeighbors.add(hoverNode.id);
+      currentLinks.forEach(l => {
+        if (l.source === hoverNode!.id) activeNeighbors.add(l.target);
+        if (l.target === hoverNode!.id) activeNeighbors.add(l.source);
+      });
+    }
+
     if (_mapActive && leafletMap) {
       const lmap = leafletMap;
       frameNodes = currentNodes
@@ -376,8 +497,12 @@
         });
       frameMap = new Map(frameNodes.map(n => [n.id, n]));
     } else {
-      frameNodes = currentNodes;
-      frameMap   = nodeMap;
+      const geoLayout = buildGeoLayout(currentNodes);
+      frameNodes = currentNodes.map(n => {
+        const geoPos = getTopologyNodePos(n, geoLayout);
+        return { ...n, x: geoPos.x, y: geoPos.y };
+      });
+      frameMap   = new Map(frameNodes.map(n => [n.id, n]));
       ctx.save();
       ctx.translate(camera.x, camera.y);
       ctx.scale(camera.scale, camera.scale);
@@ -390,15 +515,21 @@
       if (!a || !b) return;
 
       const isWeak    = link.quality < WEAK_LINK_THRESHOLD;
-      const alpha     = 0.15 + link.quality * 0.45;
+      let alpha       = 0.15 + link.quality * 0.45;
       const lineWidth = 0.8  + link.quality * 1.7;
+      
+      if (hoverNode && !_mapActive && link.source !== hoverNode.id && link.target !== hoverNode.id) {
+        alpha *= 0.15;
+      }
 
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
 
       if (isWeak) {
-        ctx.strokeStyle = `rgba(245,158,11,${0.25 + link.quality * 0.5})`;
+        let weakAlpha = 0.25 + link.quality * 0.5;
+        if (hoverNode && !_mapActive && link.source !== hoverNode.id && link.target !== hoverNode.id) weakAlpha *= 0.15;
+        ctx.strokeStyle = `rgba(245,158,11,${weakAlpha})`;
         ctx.lineWidth   = 1;
         ctx.setLineDash([4, 6]);
         ctx.stroke();
@@ -417,9 +548,11 @@
       const mx = (a.x + b.x) / 2;
       const my = (a.y + b.y) / 2;
       const d  = Math.round(Math.hypot(a.x - b.x, a.y - b.y));
+      let textAlpha = isWeak ? 0.5 : (0.12 + link.quality * 0.18);
+      if (hoverNode && !_mapActive && link.source !== hoverNode.id && link.target !== hoverNode.id) textAlpha *= 0.15;
       ctx.fillStyle   = isWeak
-        ? `rgba(245,158,11,0.5)`
-        : `rgba(255,255,255,${0.12 + link.quality * 0.18})`;
+        ? `rgba(245,158,11,${textAlpha})`
+        : `rgba(255,255,255,${textAlpha})`;
       ctx.font        = '10px "JetBrains Mono", monospace';
       ctx.textAlign   = 'center';
       ctx.fillText(`${d}m`, mx, my - 4);
@@ -429,8 +562,12 @@
     const activeWaves = currentWaves.filter(w => w.alpha > 0.01);
     sosWaves.set(activeWaves);
     activeWaves.forEach(w => {
+      const wavePoint = _mapActive && leafletMap && w.lat != null && w.lon != null
+        ? leafletMap.latLngToContainerPoint(L.latLng(w.lat, w.lon))
+        : { x: w.x, y: w.y };
+
       ctx.beginPath();
-      ctx.arc(w.x, w.y, w.r, 0, Math.PI * 2);
+      ctx.arc(wavePoint.x, wavePoint.y, w.r, 0, Math.PI * 2);
       ctx.strokeStyle = `rgba(244,63,94,${w.alpha})`;
       ctx.lineWidth   = 2.5;
       ctx.stroke();
@@ -449,12 +586,23 @@
       p.trail.push({ x: px, y: py });
       if (p.trail.length > 20) p.trail.shift();
 
-      p.trail.forEach((pt: { x: number; y: number }, i: number) => {
+      if (p.trail.length > 1) {
         ctx.beginPath();
-        ctx.arc(pt.x, pt.y, 2, 0, Math.PI * 2);
-        ctx.fillStyle = hexAlpha(p.color, (i / p.trail.length) * 0.4);
-        ctx.fill();
-      });
+        ctx.moveTo(p.trail[0].x, p.trail[0].y);
+        for (let i = 1; i < p.trail.length; i++) {
+          ctx.lineTo(p.trail[i].x, p.trail[i].y);
+        }
+        ctx.lineTo(px, py);
+        
+        const grad = ctx.createLinearGradient(p.trail[0].x, p.trail[0].y, px, py);
+        grad.addColorStop(0, 'transparent');
+        grad.addColorStop(1, hexAlpha(p.color, 0.8));
+        
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = p.type === 'sos' ? 5 : 3;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+      }
 
       ctx.beginPath();
       ctx.arc(px, py, p.type === 'sos' ? 6 : 4, 0, Math.PI * 2);
@@ -468,9 +616,12 @@
     // 4. Nodes
     frameNodes.forEach(n => {
       const nColor    = nodeColor(n);
-      const alpha     = nodeAlpha(n);
+      let alpha       = nodeAlpha(n);
+      if (hoverNode && !_mapActive && !activeNeighbors.has(n.id)) {
+        alpha *= 0.15;
+      }
       const isHovered = !_mapActive && hoverNode?.id === n.id;
-      const { x: nx, y: ny } = n; // in map mode these are screen coords; in canvas mode world coords
+      const { x: nx, y: ny } = n;
 
       ctx.globalAlpha = alpha;
 
@@ -570,6 +721,15 @@
       ctx.font        = '500 11px "Inter", sans-serif';
       ctx.textAlign   = 'center';
       ctx.fillText(n.label, nx, ny + 26);
+
+      if (_mapActive) {
+        const coords = geoLabel(n);
+        if (coords) {
+          ctx.font = '400 9px "Inter", sans-serif';
+          ctx.fillStyle = 'rgba(255,255,255,0.72)';
+          ctx.fillText(coords, nx, ny + 39);
+        }
+      }
 
       ctx.globalAlpha = 1;
     });
@@ -769,6 +929,27 @@
     <div class="map-loading">Loading map…</div>
   {/if}
 
+  {#if _mapActive}
+    <div class="map-info glass-panel">
+      <div class="map-info-row">
+        <span class="map-info-label">Location</span>
+        <span class="map-info-val">{locationStatus}</span>
+      </div>
+      <div class="map-info-row">
+        <span class="map-info-label">Center</span>
+        <span class="map-info-val">{mapCenterInfo.lat.toFixed(4)}, {mapCenterInfo.lon.toFixed(4)}</span>
+      </div>
+      <div class="map-info-row">
+        <span class="map-info-label">Zoom</span>
+        <span class="map-info-val">{mapCenterInfo.zoom}</span>
+      </div>
+      <div class="map-info-row">
+        <span class="map-info-label">Map type</span>
+        <span class="map-info-val">Street map with roads and labels</span>
+      </div>
+    </div>
+  {/if}
+
   <!-- Static background grid (canvas mode only) -->
   <canvas bind:this={bgCanvas} class="bg-canvas" class:hidden={_mapActive}></canvas>
 
@@ -882,6 +1063,7 @@
     position: absolute;
     inset: 0;
     z-index: 0;
+    filter: brightness(0.72) contrast(1.04) saturate(0.82);
   }
   .map-layer-hidden {
     opacity: 0;
@@ -899,6 +1081,44 @@
     background: rgba(0,0,0,0.35);
     border: 1px solid rgba(255,255,255,0.08);
     pointer-events: none;
+  }
+
+  .map-info {
+    position: absolute;
+    top: 72px;
+    right: 18px;
+    left: auto;
+    z-index: 35;
+    width: 260px;
+    padding: 14px 16px;
+    border-radius: 14px;
+    background: rgba(8, 12, 18, 0.72);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    backdrop-filter: blur(12px);
+    display: grid;
+    gap: 10px;
+    pointer-events: none;
+  }
+
+  .map-info-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: baseline;
+  }
+
+  .map-info-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .map-info-val {
+    font-size: 12px;
+    color: var(--text-main);
+    text-align: right;
   }
   /* Override Leaflet's default z-indices so our canvas stays on top */
   :global(.leaflet-pane)       { z-index: 1 !important; }

@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { Shield, Zap, RefreshCw, Activity, Layers, Play } from 'lucide-svelte';
-  import { nodes, links, packetCount, globalStatus, addNode, triggerSOS, clearAll } from '../lib/engine';
+  import { Shield, Zap, RefreshCw, Layers, Monitor, Map } from 'lucide-svelte';
+  import { nodes, links, packetCount, globalStatus, addNode, triggerSOS, clearAll, currentView } from '../lib/engine';
+  export let onGoHome: () => void = () => {};
 
   let nNodes = 0;
   let nLinks = 0;
@@ -27,10 +28,10 @@
 </script>
 
 <header class="glass-panel">
-  <div class="brand">
+  <button class="brand brand-button" on:click={onGoHome} aria-label="Go to landing page">
     <Shield size={22} color="var(--accent-primary)" />
     <h1>Safe<span>Mesh</span></h1>
-  </div>
+  </button>
   
   <div class="divider"></div>
   
@@ -60,6 +61,15 @@
   </div>
   
   <div class="actions">
+    <div class="view-toggle">
+      <button class="btn-toggle" class:active={$currentView === 'topology'} on:click={() => $currentView = 'topology'}>
+        <Map size={14} /> Topology
+      </button>
+      <button class="btn-toggle" class:active={$currentView === 'dashboard'} on:click={() => $currentView = 'dashboard'}>
+        <Monitor size={14} /> Dashboard
+      </button>
+    </div>
+    <div class="divider"></div>
     <button class="btn btn-primary" on:click={handleAddNode}>
       <Layers size={14} /> Add Node
     </button>
@@ -91,6 +101,14 @@
     display: flex;
     align-items: center;
     gap: 10px;
+  }
+
+  .brand-button {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: inherit;
+    padding: 0;
   }
   
   .brand h1 {
@@ -144,6 +162,34 @@
     margin-left: auto;
     display: flex;
     gap: 12px;
+    align-items: center;
+  }
+  
+  .view-toggle {
+    display: flex;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 6px;
+    padding: 2px;
+    border: 1px solid var(--panel-border);
+  }
+  .btn-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    transition: all 0.2s;
+  }
+  .btn-toggle:hover { color: var(--text-main); }
+  .btn-toggle.active {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-main);
   }
   
   .btn {
