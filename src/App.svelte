@@ -3,6 +3,7 @@
   import Header from './components/Header.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import MeshCanvas from './components/MeshCanvas.svelte';
+  import Inspector from './components/Inspector.svelte';
   import { bootDemo } from './lib/engine';
 
   onMount(() => {
@@ -17,6 +18,7 @@
   <Header />
   <div class="main-content">
     <MeshCanvas />
+    <Inspector />
     <Sidebar />
   </div>
 </div>
@@ -33,5 +35,6 @@
     display: flex;
     flex: 1;
     overflow: hidden;
+    position: relative;
   }
 </style>
